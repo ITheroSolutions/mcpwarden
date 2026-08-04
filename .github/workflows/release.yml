@@ -1,0 +1,48 @@
+name: Release
+
+# Manual dispatch only. This workflow is wired but deliberately never triggered
+# by a push or a tag: publishing is a human decision, taken after reading
+# RELEASE.md. There is no automatic path from a merge to a published package.
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Run npm publish --dry-run instead of publishing'
+        type: boolean
+        required: true
+        default: true
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  release:
+    name: publish
+    runs-on: ubuntu-latest
+    environment: npm-publish
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          registry-url: https://registry.npmjs.org
+
+      - name: Install
+        run: npm ci
+
+      - name: Verify
+        run: npm run verify
+
+      - name: Publish dry run
+        if: ${{ inputs.dry_run }}
+        run: npm publish --dry-run
+
+      - name: Publish
+        if: ${{ !inputs.dry_run }}
+        run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

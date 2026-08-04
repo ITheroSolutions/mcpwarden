@@ -1,0 +1,17 @@
+# Normalise every text file to LF in the working tree, on every platform.
+#
+# Without this, a Windows checkout with the default core.autocrlf=true gets CRLF
+# on disk, and the docs drift check compares a CRLF file on disk against the LF
+# text the generator produces. It reported docs/rules.md as out of date on both
+# Windows runners while being byte identical in the repository, which is a
+# failure that tells a contributor to regenerate a file that is already correct.
+#
+# Binary fixtures are listed explicitly so nothing here can corrupt them.
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.gif binary
+*.ico binary
+*.tgz binary
+*.gz binary

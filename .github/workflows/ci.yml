@@ -1,0 +1,95 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: node ${{ matrix.node }} on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        node: [20, 22]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Test
+        run: npm run test
+
+      - name: Build
+        run: npm run build
+
+  # Packaging correctness is platform independent, so it runs once rather than
+  # six times. It asserts that no test, fixture, ledger or captured surface is
+  # inside the tarball.
+  pack:
+    name: pack inspection
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Pack
+        # npm does not create the destination directory, it only writes into it.
+        run: mkdir -p ./.pack && npm pack --pack-destination ./.pack
+
+      - name: Inspect tarball contents
+        run: |
+          set -euo pipefail
+          tarball=$(find ./.pack -name '*.tgz' -print -quit)
+          echo "inspecting $tarball"
+          tar -tzf "$tarball" | sort | tee contents.txt
+          echo "--- forbidden entry check ---"
+          # Matches captured state and test material, never source directories.
+          # An earlier version of this pattern matched the bare word "ledger" and
+          # so flagged dist/ledger/index.js, which is compiled source. A check
+          # that cries wolf on every build is a check people learn to ignore.
+          if grep -Ei 'package/(test|tests|fixtures)/|\.test\.|\.spec\.|\.mcpwarden-ledger|/\.env|\.surface\.json|\.pin\.json|package/STATUS' contents.txt; then
+            echo "ERROR: tarball contains files that must never be published"
+            exit 1
+          fi
+          echo "--- required entry check ---"
+          for required in package/dist/index.js package/dist/index.d.ts package/dist/cli/index.js package/dist/mcp/index.js package/README.md package/LICENSE; do
+            if ! grep -qx "$required" contents.txt; then
+              echo "ERROR: tarball is missing $required"
+              exit 1
+            fi
+          done
+          echo "tarball contents are correct"
