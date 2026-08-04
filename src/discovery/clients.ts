@@ -122,8 +122,11 @@ export function knownClients(): readonly ClientDefinition[] {
     {
       id: 'vscode',
       displayName: 'VS Code',
+      // Confirmed empirically: a real discover run located servers at this path
+      // and parsed them with the `servers` shape. The workspace variant below
+      // stays `probable`, because it has not been checked the same way.
       shape: 'servers',
-      confidence: 'probable',
+      confidence: 'confirmed',
       paths: [join(vscodeUserDir, 'mcp.json')],
       note: 'VS Code also supports a workspace .vscode/mcp.json, which a machine wide scan cannot enumerate without walking every project directory.',
     },
