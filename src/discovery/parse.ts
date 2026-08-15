@@ -88,6 +88,44 @@ export function isInlineCredential(key: string, value: string): boolean {
   return /^(Bearer|Basic|Token)\s+\S+/i.test(value);
 }
 
+/**
+ * Report any credential sitting in an HTTP endpoint's query string.
+ *
+ * Found by running `discover` against a real machine. A server was configured as
+ * `https://host/mcp/stream?userToken=<a live JWT>`, and the inventory reported it
+ * as `auth none` at INFO severity, because the credential scan only ever looked at
+ * `env` and `headers`. A token in a query string is the same risk as a token in a
+ * header: it is a live credential sitting in plaintext in a configuration file,
+ * and it is worse in one respect, because URLs end up in proxy logs and browser
+ * history.
+ *
+ * The redactor had caught it for display, so the value never reached the report.
+ * That is the defence working, but it is the second layer. Detection is the first
+ * and it was silent, which is the failure that matters: a user reading that
+ * inventory would have concluded the server carried no credential at all.
+ *
+ * A JWT is recognised on shape as well as by parameter name, because the name
+ * carrying it is arbitrary and `userToken` is not in the secret name pattern.
+ */
+function scanUrlQuery(endpoint: ServerEndpoint, report: (value: string) => void): void {
+  if (endpoint.transport !== 'http') return;
+
+  let params: URLSearchParams;
+  try {
+    params = new URL(endpoint.url).searchParams;
+  } catch {
+    // An unparseable URL is already reported elsewhere. Nothing to scan.
+    return;
+  }
+
+  for (const [key, value] of params) {
+    if (isInlineCredential(key, value) || JWT_SHAPE.test(value)) report(value);
+  }
+}
+
+/** Three base64url segments separated by dots. */
+const JWT_SHAPE = /^[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}$/;
+
 function parseEndpoint(
   name: string,
   entry: Record<string, unknown>,
@@ -233,6 +271,9 @@ export function parseClientConfig(
 
     scanValues(entry['env']);
     scanValues(entry['headers']);
+    scanUrlQuery(endpoint, (value) => {
+      fingerprints.push(redactionFingerprint(value));
+    });
 
     const envNames = endpoint.transport === 'stdio' ? endpoint.envNames : [];
     const headerNames = endpoint.transport === 'http' ? endpoint.headerNames : [];

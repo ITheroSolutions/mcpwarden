@@ -171,6 +171,42 @@ describe('inline credential detection', () => {
     expect(parsed[0]?.site.hasInlineCredential).toBe(true);
     expect(parsed[0]?.authPosture).toBe('inline');
   });
+
+  it('flags a credential sitting in an HTTP endpoint URL query string', () => {
+    // Found by running discover against a real machine: a server was configured as
+    // https://host/mcp/stream?userToken=<a live JWT>, and was reported as auth: none,
+    // because the credential scan only ever looked at env and headers. A token in a
+    // query string is the same risk as a token in a header, and worse in one respect:
+    // URLs end up in proxy logs and browser history.
+    //
+    // Unlike env or header credentials, the raw endpoint.url is kept on the parsed
+    // server (it is needed for connecting, deduplication, and hashing), so this test
+    // checks the guarantee that actually holds here: detection fires and a fingerprint
+    // is recorded. Redaction of the URL itself happens downstream, at report render
+    // time in buildReport(), not at parse time. See SECURITY.md for that boundary.
+    const fakeJwt = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ0ZXN0In0.dGVzdHNpZ25hdHVyZQ';
+    const text = JSON.stringify({
+      mcpServers: { s: { url: `https://mcp.example.com/stream?userToken=${fakeJwt}` } },
+    });
+
+    const parsed = parseClientConfig(text, client('cursor', 'mcpServers', []), '/c.json');
+
+    expect(parsed[0]?.site.hasInlineCredential).toBe(true);
+    expect(parsed[0]?.authPosture).toBe('inline');
+    expect(parsed[0]?.inlineCredentialFingerprints).toHaveLength(1);
+    expect(parsed[0]?.inlineCredentialFingerprints?.[0]).not.toBe(fakeJwt);
+  });
+
+  it('does not flag an ordinary URL query parameter that is not credential shaped', () => {
+    const text = JSON.stringify({
+      mcpServers: { s: { url: 'https://mcp.example.com/stream?region=us-east&limit=10' } },
+    });
+
+    const parsed = parseClientConfig(text, client('cursor', 'mcpServers', []), '/c.json');
+
+    expect(parsed[0]?.site.hasInlineCredential).toBe(false);
+    expect(parsed[0]?.authPosture).not.toBe('inline');
+  });
 });
 
 describe('auth posture classification', () => {

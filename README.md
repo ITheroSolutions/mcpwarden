@@ -10,6 +10,17 @@ npm install -g mcpwarden
 mcpwarden discover
 ```
 
+Not yet on npm. Until the first npm release ships, run from source:
+
+```bash
+git clone https://github.com/ITheroSolutions/mcpwarden.git
+cd mcpwarden
+npm install
+npm run build
+npm link
+mcpwarden discover
+```
+
 ---
 
 ## What it does
