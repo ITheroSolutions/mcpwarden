@@ -5,6 +5,10 @@ Know what your MCP servers are advertising, and prove it has not changed.
 **No cloud. No account. No telemetry. No LLM calls anywhere in the core.** Every
 finding is deterministic and carries a specification citation you can check.
 
+If this saves you time and you want to support the work, there is a
+[pay what you want link](https://buy.stripe.com/14A7sFf24cCY6mZb4cfYY00). Entirely
+optional, the tool is free either way.
+
 ```bash
 npm install -g mcpwarden
 mcpwarden discover
