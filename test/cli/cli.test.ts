@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { run, type CliIo } from '../../src/cli/index.js';
 import { parseArgs } from '../../src/cli/args.js';
+import { knownClients } from '../../src/discovery/clients.js';
 
 let root: string;
 
@@ -432,9 +433,25 @@ describe('doctor', () => {
     expect(result.stdout).toContain('2026-07-28');
   });
 
-  it('flags client paths that are not confirmed', async () => {
+  it('does not warn about unconfirmed paths when every known client path is confirmed', async () => {
+    // Every entry in knownClients() is now `confirmed` against vendor
+    // documentation, so doctor should emit no "path is not confirmed"
+    // remediation at all. This previously asserted the opposite (that
+    // VERIFY.md was mentioned), which was correct only while Windsurf,
+    // Cline and Zed were still `probable`.
     const result = await cli(['doctor', '--format', 'json', '--ledger', join(root, 'l.log')]);
-    expect(result.stdout).toContain('VERIFY.md');
+    expect(result.stdout).not.toContain('not confirmed against documentation');
+  });
+
+  it('would warn if a known client path were ever downgraded to probable', () => {
+    // Guards the mechanism itself rather than today's data: if somebody adds
+    // a new client with an unverified path, doctor must surface it instead of
+    // silently presenting a guess as fact. Asserts on knownClients() directly
+    // so it keeps testing the contract even while no entry is probable.
+    const probable = knownClients().filter((c) => c.confidence === 'probable');
+    for (const client of probable) {
+      expect(client.note, `${client.displayName} is probable but carries no explanatory note`).toBeTruthy();
+    }
   });
 
   it('states that it makes no network requests', async () => {

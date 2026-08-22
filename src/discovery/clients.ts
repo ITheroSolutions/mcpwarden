@@ -81,7 +81,7 @@ export function knownClients(): readonly ClientDefinition[] {
         ? join(home, 'Library', 'Application Support', 'Code', 'User')
         : join(home, '.config', 'Code', 'User');
 
-  const clineDir =
+  const clineLegacyDir =
     os === 'win32'
       ? join(windowsAppData(), 'Code', 'User', 'globalStorage', 'saoudrizwan.claude-dev', 'settings')
       : os === 'darwin'
@@ -96,6 +96,13 @@ export function knownClients(): readonly ClientDefinition[] {
             'settings',
           )
         : join(home, '.config', 'Code', 'User', 'globalStorage', 'saoudrizwan.claude-dev', 'settings');
+
+  // As of Cline 4.x, MCP settings moved out of the VS Code extension's
+  // globalStorage into a shared, editor-independent data directory. The
+  // legacy globalStorage file is read once on first launch to migrate, then
+  // Cline stops writing to it -- so it is a stale read on any current
+  // install and must be checked second, not first.
+  const clineCurrentDir = join(home, '.cline', 'data', 'settings');
 
   return [
     {
@@ -134,25 +141,32 @@ export function knownClients(): readonly ClientDefinition[] {
       id: 'windsurf',
       displayName: 'Windsurf',
       shape: 'mcpServers',
-      confidence: 'probable',
+      confidence: 'confirmed',
       paths: windsurf,
-      note: 'Path not confirmed against documentation during research.',
+      note: 'Confirmed against Windsurf\'s own Cascade MCP integration docs (docs.windsurf.com/windsurf/cascade/mcp). The file is not created by Windsurf on first launch; its absence just means no MCP servers have been added yet, not that discovery failed.',
     },
     {
       id: 'cline',
       displayName: 'Cline',
       shape: 'mcpServers',
-      confidence: 'probable',
-      paths: [join(clineDir, 'cline_mcp_settings.json')],
-      note: 'Lives in VS Code extension global storage, so the extension id is part of the path and changes if the extension is republished.',
+      confidence: 'confirmed',
+      // Current path first: Cline 4.x moved MCP settings to a shared,
+      // editor-independent data directory. Legacy globalStorage path kept as
+      // a fallback for installs that have not migrated (Cline reads it once
+      // on first launch to migrate, then stops writing to it).
+      paths: [join(clineCurrentDir, 'cline_mcp_settings.json'), join(clineLegacyDir, 'cline_mcp_settings.json')],
+      note: 'Confirmed against Cline\'s own documentation and cline/cline GitHub issues discussing the 4.x migration off VS Code extension globalStorage. Both the current and legacy paths are checked since installs may not have migrated yet.',
     },
     {
       id: 'zed',
       displayName: 'Zed',
       shape: 'context_servers',
-      confidence: 'probable',
-      paths: [join(home, '.config', 'zed', 'settings.json')],
-      note: 'Zed nests servers under context_servers inside its general settings file rather than a dedicated MCP file.',
+      confidence: 'confirmed',
+      paths:
+        os === 'win32'
+          ? [join(windowsAppData(), 'Zed', 'settings.json')]
+          : [join(home, '.config', 'zed', 'settings.json')],
+      note: 'Confirmed against Zed\'s own docs (zed-industries/zed, docs/src/configuring-zed.md): macOS and Linux both use ~/.config/zed/settings.json, but Windows uses %APPDATA%\\Zed\\settings.json, a different path with different capitalization -- the code previously used the Linux/macOS path unconditionally on every platform, which would have silently missed every Windows Zed install. Zed nests servers under context_servers inside this general settings file rather than a dedicated MCP file.',
     },
   ];
 }

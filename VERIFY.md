@@ -24,6 +24,9 @@ the wrong place, which is the worst failure mode this component has.
 | Claude Code | `~/.claude.json` |
 | Cursor | `~/.cursor/mcp.json` |
 | VS Code | `<user dir>/Code/User/mcp.json`, shape `servers`. Also confirmed empirically: a real `discover` run located servers there and parsed them with the `servers` shape. |
+| Windsurf | `~/.codeium/windsurf/mcp_config.json` (same on Windows). Confirmed against Windsurf's own Cascade MCP docs (docs.windsurf.com/windsurf/cascade/mcp). The file does not exist until a server is first added through the Windsurf UI; its absence means no servers configured yet, not a wrong path. |
+| Cline | `~/.cline/data/settings/cline_mcp_settings.json`, falling back to `<VS Code global storage>/saoudrizwan.claude-dev/settings/cline_mcp_settings.json`. Confirmed against Cline's own docs and cline/cline GitHub issues: Cline 4.x moved MCP settings out of the VS Code extension's globalStorage into a shared, editor-independent data directory. The legacy globalStorage file is read once on first launch to migrate, then Cline stops writing to it, so it is checked second, as a fallback for installs that have not migrated. |
+| Zed | Linux/macOS: `~/.config/zed/settings.json`. Windows: `%APPDATA%\Zed\settings.json`, shape `context_servers`. Confirmed against zed-industries/zed's own `docs/src/configuring-zed.md`. The previous entry used the Linux/macOS path unconditionally on every platform, which would have silently missed every Windows Zed install. Windows uses a different path with different capitalization, not a variant of the same one. |
 
 Claude Desktop and Claude Code were also confirmed empirically by that same run, which
 detected configuration for both.
@@ -36,9 +39,6 @@ project directory. Those are found only when a directory is named explicitly.
 
 | Client | Assumed path | Why it is uncertain |
 | --- | --- | --- |
-| Windsurf | `~/.codeium/windsurf/mcp_config.json` | Not confirmed against documentation. |
-| Cline | `<VS Code global storage>/saoudrizwan.claude-dev/settings/cline_mcp_settings.json` | The extension id is part of the path, so it changes if the extension is ever republished under a different id. |
-| Zed | `~/.config/zed/settings.json`, shape `context_servers` | Zed nests servers inside its general settings file rather than a dedicated MCP file, so both the path and the key need checking. |
 | Generic | `mcp.json`, `.mcp.json` in a named directory | A convention rather than anything specified. Shape assumed to match the common `mcpServers` form. |
 
 **How to help.** Configure one MCP server in a client you actually use and run
@@ -106,9 +106,9 @@ malformed requests. That is precisely what a correct client library exists to pr
 and in the `CHANGELOG.md` compare link. All three move together if the repository is
 ever renamed.
 
-**Open:** whether the disclosure fallback in `SECURITY.md` should remain a personal
-mailbox. GitHub private vulnerability reporting is the primary route and does not need
-an address at all, and anything published in `SECURITY.md` gets scraped.
+**Resolved (2026-08-16):** keep both. GitHub private vulnerability reporting is the
+primary route, and the mailbox in `SECURITY.md` stays as a fallback for anyone who does
+not have or want a GitHub account. See `SECURITY.md` for the current wording.
 
 ---
 
