@@ -19,7 +19,15 @@ First release.
   eight character fingerprint. The credential itself never appears in any output.
 - `mcpwarden capture`: connects to a server over stdio or HTTP and records what it
   advertises (tools, prompts, resources and resource templates), along with the
-  protocol revision it actually spoke.
+  protocol revision it actually spoke. Each server is started the way its own client
+  starts it, with the environment values and headers from its configuration entry and
+  `${env:NAME}` style placeholders filled, but never with the rest of your
+  environment. On Windows, servers launched through `npx` and other batch files work,
+  with every argument escaped against command injection. Servers on the previous
+  revision are captured over stdio and over HTTP, including those that use sessions,
+  and one that crashes when asked `server/discover` is restarted and captured anyway.
+  A server that requires sign in is reported as exactly that, and a server that exits
+  on start is reported with what it printed.
 - `mcpwarden conform`: grades a server against the 2026-07-28 MCP specification
   with 17 rules, each citing the specification section or SEP that justifies it. A
   single MUST failure caps the letter grade regardless of score. A server that speaks

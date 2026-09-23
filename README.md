@@ -284,6 +284,14 @@ measurement.
 **A pin records that somebody approved a surface, not that anybody read it.** That is
 the weakest link in the whole design.
 
+**It cannot inspect a server that requires you to sign in.** Most hosted MCP servers
+use OAuth, and mcpwarden does not sign in to anything: doing so would mean contacting
+sign in servers you did not ask it to, and storing tokens. Such a server is reported as
+requiring sign in, clearly, rather than as a failure. A server authenticated by a
+header or token in its own configuration, including one filled from your environment
+with `${env:NAME}`, works. On the first real machine it was run against, this covered
+roughly a third of the configured servers.
+
 `docs/threat-model.md` is the honest, unflattering version of this section.
 
 ## Comparison with static scanners
@@ -328,7 +336,12 @@ Without it, `migrate` degrades to a labelled lower confidence pass.
 | `2025-11-25` | Capture, era detection and downgrade reporting. Not graded. |
 
 A capture always records which revision was actually spoken. A downgraded capture is
-never presented as a current one.
+never presented as a current one, and never graded: `conform` against a server on
+`2025-11-25` reports it as not graded, with the revision it speaks, and exits 1.
+
+Expect that for most servers today. The published MCP SDK predates `2026-07-28`, so
+nearly every server in the wild still speaks `2025-11-25`. Their surfaces can be
+captured, pinned and diffed like any other; only the grade waits for them to migrate.
 
 ## Documentation
 

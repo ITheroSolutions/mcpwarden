@@ -136,3 +136,36 @@ entry points are present. An earlier version of that check matched the bare word
 captured data. A check that cries wolf on every build is a check people learn to ignore,
 so the pattern now matches only captured state: `.mcpwarden-ledger`, `.pin.json` and
 `.surface.json`.
+
+---
+
+## 7. Servers that require sign in cannot be inspected
+
+A server that answers HTTP 401 or 403 is reported as requiring sign in, with its host,
+and is not retried. mcpwarden does not perform OAuth or any interactive sign in. See
+`DECISIONS.md` D-015 for why.
+
+This is not a corner case. On the first real machine mcpwarden was run against, roughly a
+third of the configured servers were hosted services that require OAuth, which is typical
+of any large vendor's hosted MCP endpoint.
+
+**What works today:** a server whose configuration supplies its credential as a header
+or environment value, directly or through `${env:NAME}` filled from your environment.
+
+**What would change it:** a sign in design of its own, covering which hosts may be
+contacted, where tokens live, and how they are protected. Not a transport change.
+
+---
+
+## 8. Configuration placeholders only the owning client can fill
+
+Placeholders written by VS Code, Cursor and Claude Code are filled from your
+environment: `${env:NAME}`, `${NAME}`, `${NAME:-default}` and `${userHome}`. VS Code's
+`${input:...}` prompts you inside VS Code and cannot be filled anywhere else. A value
+using one is left out, and an argument using one stops the launch with a message naming
+it. `${workspaceFolder}` is treated the same way, since outside an editor there is no
+workspace.
+
+Claude Desktop does not expand placeholders at all. A literal `${...}` in a Claude
+Desktop configuration is expanded here anyway; that is almost always a value copied
+from another client's documentation, and is recorded here in case it is not.

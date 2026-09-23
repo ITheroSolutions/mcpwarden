@@ -140,9 +140,24 @@ without the credential ever entering a report.
 **Command injection through a configured server command.** The stdio transport spawns
 with `shell: false`. An argument containing a semicolon is an argument, not a command.
 
-**Credential leakage into a spawned server's environment.** The child receives only what
-the caller explicitly named, never the parent environment. A hostile server cannot read
-credentials that belong to unrelated servers simply by being launched.
+There is one exception, and it is the most security sensitive code in the transport. On
+Windows, a batch file such as `npx.cmd` cannot run without `cmd.exe`, so it is run
+through `cmd.exe /d /s /c` with every argument escaped. `npx.cmd` re-parses its
+arguments with `%*`, so the escaping is applied twice; one level would let an argument
+such as `a"&calc&"b` run `calc` on the second parse. The current directory is never
+searched for the command, and a batch file whose path contains `%` is refused. This is
+tested on Windows against a batch file shaped like `npx.cmd`, with forty hostile
+arguments including eight injection attempts, none of which runs. `src/protocol/launch.ts`,
+`DECISIONS.md` D-013.
+
+**Credential leakage into a spawned server's environment.** The child receives the values
+its own configuration entry supplies, plus an allowlist of variables that describe the
+machine layout (`PATH`, `SYSTEMROOT`, `APPDATA`, `TEMP` and similar), never the parent
+environment wholesale. A hostile server cannot read credentials that belong to unrelated
+servers, or the operator's own tokens, simply by being launched. Its own configured
+values are a different matter: it is their intended recipient, and the operator's MCP
+client already gives them to it. Those values are never stored on the inventory, so they
+cannot reach a report, a ledger entry or a log line. `DECISIONS.md` D-014.
 
 **Orphaned processes.** On Windows the whole process tree is terminated, because killing
 a process there leaves its descendants running, and an MCP server launched through `npx`

@@ -338,3 +338,103 @@ mislabels legacy captures, which corrupts the ledger.
 **Consequence.** One extra round trip against a server that answers `-32601` to
 `server/discover`. That is a server already violating a MUST, so the cost falls
 exactly where it should.
+
+---
+
+## D-013: Batch files run through cmd.exe on Windows, with arguments escaped twice
+
+**Decision:** On Windows, a configured command is resolved against `PATH` and `PATHEXT`
+before spawning. A real executable is spawned directly by absolute path. A batch file
+(`.cmd` or `.bat`) is run through `cmd.exe /d /s /c`, with every argument quoted and every
+`cmd.exe` metacharacter escaped with `^`, twice.
+
+**Reasoning.** Most MCP servers are configured as `npx some-package`, and on Windows
+`npx` is `npx.cmd`. Windows cannot execute a batch file without its command interpreter,
+and a direct spawn fails with ENOENT because the loader searches only for `.exe` and
+`.com`. Before this, 11 of 13 local servers on the first real machine it was run on
+could not be started at all.
+
+The escaping follows the approach of the cross-spawn library. It is doubled because
+`npx.cmd` forwards its arguments with `%*`, which makes `cmd.exe` parse them a second
+time; one level of escaping survives only the first parse. cross-spawn applies the
+second level only to shims under `node_modules/.bin`, which would leave `npx.cmd` itself
+exposed.
+
+The current directory is not searched, although Windows searches it first, so a planted
+`npx.cmd` in a project directory cannot shadow the real one. A batch file whose path
+contains `%` is refused: quoting does not stop `%NAME%` expansion, and such paths are
+too rare to justify the risk.
+
+**Rejected:** `shell: true`. Node would build the command line without escaping it for
+`cmd.exe`, which is the injection this transport exists to prevent.
+
+**Rejected:** taking a dependency on cross-spawn. The package carries no runtime
+dependencies, and the part needed is small enough to own and test directly.
+
+**Consequence.** The only place a configured command line is ever interpreted by a
+shell is `src/protocol/launch.ts`, and it is tested on Windows against a batch file
+shaped like `npx.cmd` with forty hostile arguments, including eight injection attempts.
+
+---
+
+## D-014: A server receives what its own configuration supplies
+
+**Decision:** When connecting, a server receives the environment values and HTTP
+headers from its own configuration entry, with `${env:NAME}`, `${NAME}`,
+`${NAME:-default}` and `${userHome}` filled from the operator's environment. It also
+inherits a short allowlist of variables describing the machine layout (`PATH`,
+`SYSTEMROOT`, `APPDATA`, `TEMP` and similar), which is the reference MCP SDK's default
+set plus a few of the same kind. Nothing else from the operator's environment reaches
+it.
+
+**Reasoning.** Discovery originally recorded only the names of configured variables and,
+at connect time, looked those names up in mcpwarden's own environment. So a server
+configured with `DATA_DIR=C:\data` started without it and exited, and a server with no
+`PATH` could not start its own subprocesses. mcpwarden could not inspect servers its
+operator's clients run without trouble.
+
+Handing a server its own configuration is not a disclosure. It is the intended recipient,
+and the operator's MCP client already gives it the same values. What must not happen is
+the operator's *other* secrets reaching it, and that still does not: `GITHUB_TOKEN` in
+the operator's shell reaches a server only if that server's configuration references it.
+
+The values are never stored on the `ServerRef`. They are kept in a `WeakMap` keyed by the
+parsed endpoint, so they cannot be serialised into an inventory, report, ledger entry or
+log line by accident.
+
+A placeholder only the owning client can fill, such as VS Code's `${input:...}`, is left
+out. In an argument it stops the launch with a message naming it, because starting the
+server with the literal text would only produce a confusing failure inside it.
+
+**Rejected:** keeping the names only behaviour. It made mcpwarden unable to inspect
+exactly the servers most worth inspecting, and the credential it protected was going to
+the server anyway.
+
+**Rejected:** inheriting the operator's whole environment, as some clients do. That is
+the leak the transport exists to prevent.
+
+**Consequence.** The library API fills placeholders only from the `env` a caller passes
+explicitly; it never reads the host environment on the caller's behalf.
+
+---
+
+## D-015: Sign in required is its own outcome, and sign in is not attempted
+
+**Decision:** An HTTP 401 or 403 raises `AuthenticationRequiredError`, before the body is
+interpreted, and is not retried. mcpwarden does not perform OAuth or any interactive sign
+in.
+
+**Reasoning.** Most hosted MCP servers refuse unauthenticated requests, each with a body
+in its own format. Parsed as protocol messages, those bodies produced reports like
+"returned neither a result nor an error", which sent people looking for a bug that did
+not exist. The status is the one signal every server agrees on.
+
+Performing OAuth would mean contacting authorization servers other than the server being
+inspected, which breaks the promise that mcpwarden only connects to what it is asked to
+inspect, and storing tokens, which is a credential store this package would then have to
+defend. Both deserve a design of their own rather than being added to a transport.
+
+**Consequence.** A server that requires OAuth cannot currently be captured. A server
+authenticated by a header or token in its configuration, or in the operator's
+environment through a placeholder, can be. The limitation is stated in `VERIFY.md` and
+the README rather than left for a user to discover.

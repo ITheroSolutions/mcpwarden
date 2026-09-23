@@ -105,12 +105,18 @@ disposable.
 
 The stdio transport is the one with sharp edges, and each is handled deliberately:
 
-- **No shell, ever.** `shell: false` on the spawn. The command and its arguments come
-  from a configuration file this package did not write, and routing through a shell
-  would turn an argument containing a semicolon into arbitrary code execution.
-- **Environment isolation.** The child receives only what the caller explicitly named,
-  never the parent environment wholesale. Inheriting would leak every credential this
-  process holds into a server that may be hostile.
+- **No shell, except where Windows leaves no choice.** `shell: false` on the spawn. The
+  command and its arguments come from a configuration file this package did not write,
+  and routing through a shell would turn an argument containing a semicolon into
+  arbitrary code execution. A Windows batch file such as `npx.cmd` can only run under
+  `cmd.exe`, so `src/protocol/launch.ts` resolves the command against `PATH` itself and,
+  for a batch file only, builds a `cmd.exe` invocation with every argument escaped
+  twice. D-013 explains why twice.
+- **Environment isolation.** The child receives the values its own configuration entry
+  supplies, placeholders such as `${env:NAME}` filled, plus a short allowlist of
+  variables that describe the machine rather than the user. Never the parent
+  environment wholesale: inheriting would leak every credential this process holds into
+  a server that may be hostile. D-014.
 - **stderr is not an error channel.** The specification says a server may write
   anything there and a client should not read it as a problem. It is captured
   separately, capped at 64 KiB, and never merged into the message stream.
