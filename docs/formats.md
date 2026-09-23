@@ -397,17 +397,25 @@ One JSON object per file.
 
 ```json
 {
-  "serverId": "4f5b452d",
+  "serverId": "a1b2c3d4",
   "surfaceRoot": "sha256:...",
   "descriptorHashes": { "tool:get_weather": "sha256:..." },
+  "fieldHashes": {
+    "tool:get_weather": {
+      "description": "sha256:...",
+      "input": "sha256:...",
+      "rest": "sha256:..."
+    }
+  },
   "revisionUsed": "2026-07-28",
   "approvedAt": "2026-08-04T00:00:00.000Z",
-  "approvedBy": "tyler",
+  "approvedBy": "reviewer",
   "note": "reviewed the tool descriptions"
 }
 ```
 
-`note` is optional. Every other field is required.
+`note` is optional. `fieldHashes` is optional, and absent from pins written before it
+existed. Every other field is required.
 
 A pin stores **hashes only**, never descriptor content. A pin should not be a copy
 of a server's surface sitting in a file, both because it would be large and because
@@ -416,10 +424,26 @@ it would duplicate data whose whole point is to live at the server.
 `approvedBy` is self reported free text. It is not authenticated and must never be
 treated as a security control.
 
-The consequence of storing hashes only is that a diff against a pin can detect
-*that* a descriptor changed but cannot say *what* changed within it. A full field
-level diff requires the previous surface, which the ledger references but does not
-itself store.
+### 6.1 Field hashes
+
+`fieldHashes` maps each descriptor key to hashes of its parts, so a diff can say
+*which* part of a descriptor changed without the pin storing any of it. Each part is
+hashed exactly as a whole descriptor is, `sha256` over its canonical JSON (section
+3), with the same `sha256:` prefix:
+
+| Key | Hashes | Present when |
+| --- | --- | --- |
+| `description` | the value of `description` | the descriptor has one |
+| `input` | the value of `inputSchema` for a tool, `arguments` for a prompt | the descriptor has one |
+| `rest` | the descriptor object with `description` and the input field removed | always |
+
+A key is omitted, not set to null, when the part is absent. Two descriptors whose
+`description` keys are both absent therefore compare equal on that part.
+
+What a pin still cannot say is how the old text read, since it holds no text. A diff
+against a pin therefore checks the *current* text for signs of poisoning. A diff
+between two full captures, which have content on both sides, can compare the text
+directly. Neither the pin nor the ledger stores descriptor content.
 
 ---
 

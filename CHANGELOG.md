@@ -34,9 +34,12 @@ First release.
   a different revision is reported as not graded, and the command fails, rather than
   being scored against rules that do not apply to it.
 - `mcpwarden trust` and `mcpwarden diff`: approve a server's current surface as a
-  baseline, then detect later changes descriptor by descriptor, each with a risk
-  tier. A changed description on an existing tool, the tool poisoning signal, is
-  reported as a change to that tool rather than lost in general churn.
+  baseline, then detect later changes descriptor by descriptor, saying which part
+  changed (description, input schema, or other fields) and giving each a risk tier.
+  Critical is reserved for new or changed text a model will read that carries a sign
+  of tool poisoning, such as hidden Unicode, an `<IMPORTANT>` instruction tag, a
+  direction to keep something from the user, or a reference to a credential file.
+  The pin stores hashes only, never a server's content.
 - `mcpwarden ledger log`, `ledger verify` and `ledger export`: an append only, hash
   chained record of every capture. `verify` names the exact entry where integrity
   fails. The format is specified in `docs/formats.md` precisely enough to write an

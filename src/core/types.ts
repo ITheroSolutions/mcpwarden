@@ -276,6 +276,12 @@ export type DriftKind =
   | 'input-schema-widened'
   | 'input-schema-narrowed'
   | 'input-schema-changed-incompatibly'
+  /** The schema changed, and a pin cannot say in which direction. */
+  | 'input-schema-changed'
+  /** Something other than the description or schema changed, such as title or annotations. */
+  | 'metadata-changed'
+  /** Changed, compared against a pin too old to say which part. */
+  | 'descriptor-changed'
   | 'required-parameter-added'
   | 'name-collision'
   | 'revision-changed';
@@ -287,6 +293,9 @@ export const DRIFT_KINDS = [
   'input-schema-widened',
   'input-schema-narrowed',
   'input-schema-changed-incompatibly',
+  'input-schema-changed',
+  'metadata-changed',
+  'descriptor-changed',
   'required-parameter-added',
   'name-collision',
   'revision-changed',
@@ -355,10 +364,26 @@ export interface LedgerEntry {
 }
 
 /** An approved baseline for a server's surface. */
+/** Hashes of the parts of one descriptor. See docs/formats.md section 6. */
+export interface DescriptorFieldHashes {
+  /** The `description` string. Absent when the descriptor has none. */
+  readonly description?: ContentHash;
+  /** `inputSchema` for a tool, `arguments` for a prompt. Absent otherwise. */
+  readonly input?: ContentHash;
+  /** Every other field, with those two removed. */
+  readonly rest: ContentHash;
+}
+
 export interface TrustPin {
   readonly serverId: string;
   readonly surfaceRoot: ContentHash;
   readonly descriptorHashes: Readonly<Record<string, ContentHash>>;
+  /**
+   * Per descriptor, a hash of each part separately, so a later diff can say which
+   * part changed without the pin storing any content. Absent in pins written
+   * before it existed; see docs/formats.md section 6.
+   */
+  readonly fieldHashes?: Readonly<Record<string, DescriptorFieldHashes>>;
   readonly revisionUsed: ProtocolRevision;
   /** ISO 8601, always UTC. */
   readonly approvedAt: string;

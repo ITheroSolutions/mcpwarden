@@ -18,6 +18,12 @@
  * from content hash precisely so this reads as a modification rather than as a
  * removal plus an addition.
  *
+ * A changed description is not by itself proof of anything, though. Legitimate
+ * servers reword their tools on every release, and rating every such change
+ * critical made one routine upgrade of a real server produce seventeen critical
+ * alarms. Critical is reserved for a change whose text carries a sign of
+ * poisoning; see markers.ts.
+ *
  * ## The risk score is a heuristic and is labelled as one everywhere
  *
  * Weights are documented in full and every one is configurable. The score orders a
@@ -28,14 +34,17 @@
 import { readFile, mkdir, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
-import type { ContentHash } from '../core/canonical.js';
+import { canonicalizeJsonValue, hashCanonicalForm, type ContentHash } from '../core/canonical.js';
 import { readDescription, readInputSchema, readRequiredParameters, readSchemaProperties } from '../core/descriptor.js';
 import { DiscoveryError, toMcpWardenError } from '../core/errors.js';
 import { descriptorKey } from '../core/merkle.js';
 import { redact } from '../core/redaction.js';
+import type { JsonValue } from '../core/json-parse.js';
+import { findPoisoningMarkers } from './markers.js';
 import {
   assertNever,
   type Descriptor,
+  type DescriptorFieldHashes,
   type DescriptorCategory,
   type DriftEvent,
   type DriftKind,
@@ -72,8 +81,11 @@ export const DEFAULT_RISK_WEIGHTS: RiskWeights = {
     // than deceiving them.
     'descriptor-removed': 3,
 
-    // The tool poisoning signal. Highest base weight of any classification.
-    'description-changed': 8,
+    // The text the model reads was replaced. How tool poisoning presents, but
+    // also how every legitimate release presents, so on its own it is medium,
+    // high on a tool that touches the filesystem, network or shell, and critical
+    // only when the new text carries a sign of poisoning.
+    'description-changed': 4,
 
     // Accepting more input than before. Lower risk on its own, but it is how a
     // benign looking tool grows an exfiltration path.
@@ -84,6 +96,16 @@ export const DEFAULT_RISK_WEIGHTS: RiskWeights = {
 
     // Neither purely wider nor narrower. Something was restructured.
     'input-schema-changed-incompatibly': 6,
+
+    // Changed, but a comparison against a pin cannot say in which direction.
+    'input-schema-changed': 4,
+
+    // Title, annotations, or another field the model is less likely to act on.
+    'metadata-changed': 2,
+
+    // Changed, against a pin too old to say which part. Weighted like a
+    // description change, since it might be one.
+    'descriptor-changed': 4,
 
     // A new mandatory parameter changes what every existing caller must send.
     'required-parameter-added': 5,
@@ -150,6 +172,12 @@ export function createPin(surface: ServerSurface, options: PinOptions): TrustPin
     serverId: surface.server.id,
     surfaceRoot: surface.hashes.root,
     descriptorHashes: surface.hashes.byDescriptor,
+    fieldHashes: Object.fromEntries(
+      surface.descriptors.map((descriptor) => [
+        descriptorKey(descriptor.category, descriptor.identity),
+        fieldHashesOf(descriptor),
+      ]),
+    ),
     revisionUsed: surface.revisionUsed,
     approvedAt: options.approvedAt ?? new Date().toISOString(),
     approvedBy: options.approvedBy,
@@ -248,6 +276,7 @@ export function diffAgainstPin(
           weights,
           isSensitive(descriptor),
           { after: descriptor.hash },
+          markersIn(descriptor),
         ),
       );
       continue;
@@ -262,9 +291,7 @@ export function diffAgainstPin(
 
     // Something about this descriptor changed. Classify what, because "changed"
     // alone does not tell a reviewer whether to care.
-    events.push(
-      ...classifyChange(descriptor, pinnedHash, weights),
-    );
+    events.push(...classifyChange(descriptor, pin.fieldHashes?.[key], weights));
   }
 
   for (const key of pinnedKeys) {
@@ -298,32 +325,144 @@ export function diffAgainstPin(
 }
 
 /**
- * Classify what changed about a descriptor that already existed.
+ * Classify what changed about a descriptor that already existed, against a pin.
  *
  * A pin stores hashes, not content, which is deliberate: a pin should not be a
- * copy of a server's surface sitting in a file. The consequence is that this can
- * see the *current* content but only the *previous* hash, so it reports what the
- * descriptor now is rather than a field by field diff against the old text.
+ * copy of a server's surface sitting in a file. Since per field hashes were added
+ * it can still say *which* part changed: the description, the input schema, or
+ * other fields such as the title. What it cannot say is how the old text read, so
+ * the current text is what is checked for signs of poisoning.
  *
- * A full before and after diff needs the previous capture, which the ledger has.
- * That is `diffAgainstSurface`, below.
+ * A pin written before per field hashes existed cannot even say which part, and
+ * this used to report every such change as a description change, the highest
+ * weighted classification, which it had no evidence for. It now says the part is
+ * unknown.
  */
 function classifyChange(
   descriptor: Descriptor,
-  _pinnedHash: ContentHash,
+  pinned: DescriptorFieldHashes | undefined,
   weights: RiskWeights,
 ): readonly DriftEvent[] {
-  return [
-    buildEvent(
-      'description-changed',
-      descriptor.category,
-      descriptor.identity,
-      `${descriptor.category} ${descriptor.identity} changed after it was approved`,
-      weights,
-      isSensitive(descriptor),
-      { after: descriptor.hash },
-    ),
-  ];
+  const sensitive = isSensitive(descriptor);
+  const markers = markersIn(descriptor);
+  const hashes = { after: descriptor.hash };
+  const label = `${descriptor.category} ${descriptor.identity}`;
+
+  if (pinned === undefined) {
+    return [
+      buildEvent(
+        'descriptor-changed',
+        descriptor.category,
+        descriptor.identity,
+        `${label} changed after it was approved. This pin predates per field hashes, so ` +
+          'which part changed is unknown; trust the server again to record them.',
+        weights,
+        sensitive,
+        hashes,
+        markers,
+      ),
+    ];
+  }
+
+  const now = fieldHashesOf(descriptor);
+  const events: DriftEvent[] = [];
+
+  if (now.description !== pinned.description) {
+    events.push(
+      buildEvent(
+        'description-changed',
+        descriptor.category,
+        descriptor.identity,
+        `${label}: the description changed after it was approved`,
+        weights,
+        sensitive,
+        hashes,
+        markers,
+      ),
+    );
+  }
+
+  if (now.input !== pinned.input) {
+    events.push(
+      buildEvent(
+        'input-schema-changed',
+        descriptor.category,
+        descriptor.identity,
+        `${label}: the input schema changed after it was approved`,
+        weights,
+        sensitive,
+        hashes,
+        markers,
+      ),
+    );
+  }
+
+  if (now.rest !== pinned.rest) {
+    events.push(
+      buildEvent(
+        'metadata-changed',
+        descriptor.category,
+        descriptor.identity,
+        `${label}: fields other than the description and schema changed, such as the title or annotations`,
+        weights,
+        sensitive,
+        hashes,
+      ),
+    );
+  }
+
+  return events;
+}
+
+/**
+ * Hash each part of a descriptor separately. See docs/formats.md section 6.
+ *
+ * Each part is hashed exactly as a whole descriptor is, `sha256` over its
+ * canonical JSON, so an independent implementation needs nothing new.
+ */
+export function fieldHashesOf(descriptor: Descriptor): DescriptorFieldHashes {
+  const value = descriptor.value;
+  const inputField = inputFieldOf(descriptor);
+
+  const rest: Record<string, JsonValue> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (key === 'description' || key === inputField) continue;
+    rest[key] = entry;
+  }
+
+  const description = value['description'];
+  const input = inputField === undefined ? undefined : value[inputField];
+
+  return {
+    ...(description === undefined ? {} : { description: hashPart(description) }),
+    ...(input === undefined ? {} : { input: hashPart(input) }),
+    rest: hashPart(rest),
+  };
+}
+
+function hashPart(part: JsonValue): ContentHash {
+  return hashCanonicalForm(canonicalizeJsonValue(part));
+}
+
+/** The field carrying a descriptor's input shape: `inputSchema` for a tool, `arguments` for a prompt. */
+function inputFieldOf(descriptor: Descriptor): string | undefined {
+  if (descriptor.category === 'tool') return 'inputSchema';
+  if (descriptor.category === 'prompt') return 'arguments';
+  return undefined;
+}
+
+/**
+ * Signs of poisoning in everything about a descriptor the model reads: its
+ * description, and the text inside its input schema, where parameter
+ * descriptions are an equally good hiding place.
+ */
+function markersIn(descriptor: Descriptor): readonly string[] {
+  const inputField = inputFieldOf(descriptor);
+  const input = inputField === undefined ? undefined : descriptor.value[inputField];
+
+  return findPoisoningMarkers(
+    [readDescription(descriptor) ?? '', input === undefined ? '' : JSON.stringify(input)].join('\n'),
+  );
 }
 
 /**
@@ -375,6 +514,7 @@ export function diffSurfaces(
           weights,
           isSensitive(descriptor),
           { after: descriptor.hash },
+          markersIn(descriptor),
         ),
       );
       continue;
@@ -430,6 +570,8 @@ function classifyDetailed(
   const beforeDescription = readDescription(before);
   const afterDescription = readDescription(after);
 
+  const markers = markersIn(after);
+
   if (beforeDescription !== afterDescription) {
     events.push(
       buildEvent(
@@ -440,6 +582,7 @@ function classifyDetailed(
         weights,
         sensitive,
         { before: before.hash, after: after.hash },
+        markers,
       ),
     );
   }
@@ -509,15 +652,36 @@ function classifyDetailed(
     );
   }
 
-  // Something moved but none of the specific classifications matched, so say so
-  // rather than reporting nothing and leaving the changed hash unexplained.
-  if (events.length === 0) {
+  // A schema can change without gaining or losing a parameter: a type, a
+  // constraint, or a parameter's own description, which the model also reads.
+  // This used to fall into a catch all reported as an incompatible restructure,
+  // including when only the title had changed.
+  const beforeFields = fieldHashesOf(before);
+  const afterFields = fieldHashesOf(after);
+  const schemaReported = events.some((event) => event.kind !== 'description-changed');
+
+  if (beforeFields.input !== afterFields.input && !schemaReported) {
     events.push(
       buildEvent(
-        'input-schema-changed-incompatibly',
+        'input-schema-changed',
         after.category,
         after.identity,
-        'content changed in a way no specific classification matched',
+        'the schema changed without gaining or losing a parameter, for example a type or a parameter description',
+        weights,
+        sensitive,
+        { before: before.hash, after: after.hash },
+        markers,
+      ),
+    );
+  }
+
+  if (beforeFields.rest !== afterFields.rest) {
+    events.push(
+      buildEvent(
+        'metadata-changed',
+        after.category,
+        after.identity,
+        'fields other than the description and schema changed, such as the title or annotations',
         weights,
         sensitive,
         { before: before.hash, after: after.hash },
@@ -600,14 +764,19 @@ function buildEvent(
   weights: RiskWeights,
   sensitive: boolean,
   hashes: { before?: ContentHash; after?: ContentHash } = {},
+  markers: readonly string[] = [],
 ): DriftEvent {
   const base = weights.kind[kind];
-  const score = sensitive ? base * weights.sensitiveCapability : base;
+  const weighted = sensitive ? base * weights.sensitiveCapability : base;
+
+  // A sign of poisoning in new or changed text is what critical is for.
+  const score = markers.length > 0 ? Math.max(weighted, weights.thresholds.critical) : weighted;
 
   const factors: string[] = [describeKind(kind)];
   if (sensitive) {
     factors.push('schema or description suggests filesystem, network, shell or credential access');
   }
+  factors.push(...markers);
 
   return {
     kind,
@@ -642,6 +811,12 @@ export function describeKind(kind: DriftKind): string {
       return 'the schema now accepts less than it did';
     case 'input-schema-changed-incompatibly':
       return 'the schema was restructured';
+    case 'input-schema-changed':
+      return 'the schema changed';
+    case 'metadata-changed':
+      return 'a field other than the description or schema changed';
+    case 'descriptor-changed':
+      return 'the item changed, and the pin is too old to say which part';
     case 'required-parameter-added':
       return 'a new parameter is now mandatory';
     case 'name-collision':

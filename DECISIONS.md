@@ -438,3 +438,43 @@ defend. Both deserve a design of their own rather than being added to a transpor
 authenticated by a header or token in its configuration, or in the operator's
 environment through a placeholder, can be. The limitation is stated in `VERIFY.md` and
 the README rather than left for a user to discover.
+
+---
+
+## D-016: Drift says which part changed, and critical needs evidence
+
+**Decision:** A pin records, alongside each descriptor's hash, a hash of each of its
+parts: the description, the input schema (or a prompt's arguments), and everything
+else. A diff reports which part changed. Critical is reserved for a new or changed
+item whose model facing text carries a sign of poisoning: hidden Unicode, an
+instruction tag such as `<IMPORTANT>`, a direction to keep something from the user or
+to ignore other instructions, steering about other tools, or a reference to a
+credential file. The base weight of a description change drops from 8 to 4, so a
+plain reword is medium, or high on a tool that touches the filesystem, network or
+shell.
+
+**Reasoning.** Pinning one real release of a browser automation MCP server and
+diffing a later real release against it produced seventeen critical events, all
+labelled "description changed". Two things were wrong. A pin stored only whole
+descriptor hashes, so every change was reported as a description change, the highest
+weighted classification, with no evidence; in fact seventeen tools had changed their
+input schema and two their description. And any change to a tool mentioning the
+network multiplied into critical, so a legitimate upgrade was indistinguishable from
+an attack. An alarm that fires on every upgrade is one nobody reads.
+
+Per part hashes keep the property that a pin stores no content. The poisoning signs
+are checked on the current text, the only text a pin can see, including the text
+inside the input schema, where parameter descriptions are as good a hiding place as
+the description.
+
+**Rejected:** storing descriptor content in the pin, which would let a diff compare
+text directly. A pin should not be a copy of a server's surface sitting in a file.
+
+**Rejected:** a model judging whether a description is malicious. No model calls in the
+core.
+
+**Consequence.** The same real upgrade now reports no critical events: seventeen
+schema changes and eight new tools at high, two description changes, four metadata
+only changes and eight removals. Pins written before this carry no field hashes; a
+diff against one says the changed part is unknown rather than guessing, and trusting
+the server again records them.
