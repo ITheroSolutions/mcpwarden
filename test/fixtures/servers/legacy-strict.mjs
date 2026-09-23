@@ -41,6 +41,21 @@ createInterface({ input: process.stdin }).on('line', (line) => {
     return;
   }
 
+  // Mimics an older Python SDK server observed in the wild: an unknown method
+  // name fails validation and the process exits instead of replying.
+  const KNOWN = new Set([
+    'initialize',
+    'ping',
+    'tools/list',
+    'prompts/list',
+    'resources/list',
+    'resources/templates/list',
+  ]);
+  if (process.env.LEGACY_STRICT_CRASH_ON_UNKNOWN === '1' && !KNOWN.has(message.method)) {
+    process.stderr.write(`ValidationError: Input should be 'tools/list' [input_value='${message.method}']\n`);
+    process.exit(1);
+  }
+
   if (!initialized) {
     fail(-32602, 'Received request before initialization was complete');
     return;

@@ -70,9 +70,9 @@ describe('planLaunch on Windows, with a simulated filesystem', () => {
   });
 
   it('spawns a real executable directly, by absolute path', () => {
-    const plan = planLaunch('uvx', ['serena'], host);
+    const plan = planLaunch('uvx', ['some-server'], host);
     expect(plan.file.toLowerCase()).toBe('c:\\tools\\uvx.exe');
-    expect(plan.args).toEqual(['serena']);
+    expect(plan.args).toEqual(['some-server']);
     expect(plan.windowsVerbatimArguments).toBe(false);
   });
 
@@ -235,7 +235,7 @@ describe('a batch file that re-parses its arguments', () => {
     'a\\\\',
     'a\\"b',
     'C:\\Program Files\\x',
-    '@upstash/context7-mcp@1.0.31',
+    '@scope/some-mcp@1.2.3',
     '--registry',
     'https://registry.npmjs.org',
     'caf\u00e9',
@@ -274,6 +274,24 @@ describe('a command that does not exist', () => {
       transport.request({ jsonrpc: '2.0', id: 1, method: 'tools/list' }, 20_000),
     ).rejects.toThrow(/mcpwarden-no-such-command-xyz" was not found/);
     expect(Date.now() - started).toBeLessThan(5_000);
+
+    await transport.dispose();
+  }, 30_000);
+});
+
+describe('a server that exits on start', () => {
+  it('reports what the server said, not only its exit code', async () => {
+    // "exited with code 1" alone sent people off to reproduce the failure by
+    // hand; the reason is almost always on stderr.
+    const dead = fileURLToPath(new URL('../fixtures/servers/exits-immediately.mjs', import.meta.url));
+    const transport = new StdioTransport({ command: process.execPath, args: [dead] });
+    transport.start();
+
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+
+    await expect(
+      transport.request({ jsonrpc: '2.0', id: 1, method: 'tools/list' }, 5_000),
+    ).rejects.toThrow(/exited with code 1\. Its last output was: fatal: missing required argument --dsn/);
 
     await transport.dispose();
   }, 30_000);

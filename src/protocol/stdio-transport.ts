@@ -119,8 +119,9 @@ export class StdioTransport {
       ...(this.options.cwd === undefined ? {} : { cwd: this.options.cwd }),
     });
 
+    let child: ChildProcessWithoutNullStreams;
     try {
-      this.child = spawn(plan.file, [...plan.args], {
+      child = spawn(plan.file, [...plan.args], {
         stdio: ['pipe', 'pipe', 'pipe'],
         env,
         ...(this.options.cwd === undefined ? {} : { cwd: this.options.cwd }),
@@ -134,32 +135,38 @@ export class StdioTransport {
         cause,
       });
     }
+    this.child = child;
 
-    this.child.stdout.setEncoding('utf8');
-    this.child.stderr.setEncoding('utf8');
+    // Every handler checks that it still belongs to the current child. After a
+    // restart, the previous process can still deliver buffered output or a late
+    // event, and letting that into the new session would corrupt it.
+    const current = (): boolean => this.child === child;
 
-    this.child.stdout.on('data', (chunk: string) => {
-      this.onStdout(chunk);
+    child.stdout.setEncoding('utf8');
+    child.stderr.setEncoding('utf8');
+
+    child.stdout.on('data', (chunk: string) => {
+      if (current()) this.onStdout(chunk);
     });
 
-    this.child.stderr.on('data', (chunk: string) => {
-      this.onStderr(chunk);
+    child.stderr.on('data', (chunk: string) => {
+      if (current()) this.onStderr(chunk);
     });
 
     // A write to a server that has already died raises EPIPE on stdin. Without a
     // listener that is an uncaught exception that takes the whole CLI down; the
     // exit handler below is what reports the death.
-    this.child.stdin.on('error', (error) => {
+    child.stdin.on('error', (error) => {
       this.logger.debug('server stdin closed', { message: error.message });
     });
 
-    this.child.on('error', (error) => {
-      const child = this.child;
+    child.on('error', (error) => {
+      if (!current()) return;
 
       // No pid means the process never started. That is final: mark it exited so
       // every request fails at once with the reason, rather than each one being
       // written to a process that does not exist and timing out long after.
-      if (child?.pid === undefined) {
+      if (child.pid === undefined) {
         const code = (error as NodeJS.ErrnoException).code;
         this.exited = true;
         this.exitReason =
@@ -179,7 +186,9 @@ export class StdioTransport {
       this.failAll(new TransportError(`Child process error: ${error.message}`, { cause: error }));
     });
 
-    this.child.on('exit', (code, signal) => {
+    child.on('exit', (code, signal) => {
+      if (!current()) return;
+
       this.exited = true;
       this.exitReason =
         signal === null ? `exited with code ${String(code)}` : `killed by signal ${signal}`;
@@ -188,11 +197,38 @@ export class StdioTransport {
 
       // A server that dies mid capture must not leave a caller awaiting forever.
       this.failAll(
-        new TransportError(`Server process ${this.exitReason} while requests were in flight`, {
-          details: { code, signal, stderr: this.stderr.slice(-2000) },
-        }),
+        new TransportError(
+          `Server process ${this.exitReason} while requests were in flight${this.stderrTail()}`,
+          { details: { code, signal, stderr: this.stderr.slice(-2000) } },
+        ),
       );
     });
+  }
+
+  /**
+   * Start the server again after it has exited.
+   *
+   * Some handshake era servers crash outright when sent a method they do not
+   * recognise, and the era probe's `server/discover` is exactly that. The
+   * client restarts the server and proceeds straight to the legacy handshake,
+   * since crashing on the probe is itself proof the server is not modern. Only
+   * valid once the previous process has exited.
+   */
+  restart(): void {
+    if (this.disposed) throw new TransportError('Transport has been disposed');
+    if (this.child !== undefined && !this.exited) {
+      throw new TransportError('Cannot restart a server that is still running');
+    }
+
+    this.child = undefined;
+    this.exited = false;
+    this.exitReason = undefined;
+    this.buffer = '';
+    // A later crash should report its own output, not the previous one's.
+    this.stderrChunks = [];
+    this.stderrBytes = 0;
+
+    this.start();
   }
 
   private onStdout(chunk: string): void {
@@ -294,7 +330,7 @@ export class StdioTransport {
       throw new TransportError(
         this.exitReason === undefined
           ? 'Transport is not running'
-          : `Transport is not running: server ${this.exitReason}`,
+          : `Transport is not running: server ${this.exitReason}${this.stderrTail()}`,
       );
     }
 
@@ -383,7 +419,7 @@ export class StdioTransport {
         new TransportError(
           this.exitReason === undefined
             ? 'Transport is not running'
-            : `Transport is not running: server ${this.exitReason}`,
+            : `Transport is not running: server ${this.exitReason}${this.stderrTail()}`,
         ),
       );
     }
@@ -395,6 +431,28 @@ export class StdioTransport {
     }
 
     return Promise.resolve();
+  }
+
+  /**
+   * The last few lines the server wrote to stderr, as a sentence to append to a
+   * report that it died.
+   *
+   * A server that exits on start almost always says why on stderr, as in
+   * "DATA_DIR is not set", and "exited with code 1" alone sends the reader
+   * off to reproduce the failure by hand. Everything here passes through the
+   * error constructor, which redacts, so a server that prints its own
+   * connection string does not leak it into the report.
+   */
+  private stderrTail(): string {
+    const lines = this.stderr
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0);
+
+    if (lines.length === 0) return '';
+
+    const tail = lines.slice(-3).join(' / ');
+    return `. Its last output was: ${tail.length > 400 ? `...${tail.slice(-400)}` : tail}`;
   }
 
   private failAll(error: Error): void {

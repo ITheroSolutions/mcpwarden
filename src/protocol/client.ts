@@ -52,6 +52,13 @@ export interface Transport {
    * `request` and ignores the outcome.
    */
   notify?(message: Record<string, unknown>, timeoutMs: number, signal?: AbortSignal): Promise<void>;
+  /**
+   * False once a process based server has exited. Absent for transports with no
+   * process, such as HTTP.
+   */
+  readonly isRunning?: boolean;
+  /** Start a process based server again after it exited. Optional. */
+  restart?(): void;
   dispose(): Promise<void>;
 }
 
@@ -123,6 +130,8 @@ export interface DiscoverOutcome {
   readonly era: ProtocolEra;
   /** The error code the probe received, when it received one. */
   readonly probeErrorCode?: number;
+  /** The server exited when probed, and was restarted. */
+  readonly probeCrashedServer?: boolean;
 }
 
 /**
@@ -274,6 +283,46 @@ export class McpClient {
   }
 
   /**
+   * Run the era probe, surviving a server that the probe itself kills.
+   *
+   * Found on a real server: a Python MCP server built on an older SDK answered
+   * `server/discover` by failing validation of the method name and exiting,
+   * rather than replying with method not found. A modern server must implement
+   * `server/discover`, so dying on it is itself proof of a handshake era server.
+   * When the transport can restart the process, it is restarted and the capture
+   * continues down the legacy path, instead of the whole capture failing on a
+   * question the server could not have answered.
+   */
+  private async discoverOrRestart(revision: ProtocolRevision): Promise<DiscoverOutcome> {
+    try {
+      return await this.discover(revision);
+    } catch (error) {
+      const died =
+        error instanceof TransportError &&
+        this.transport.isRunning === false &&
+        this.transport.restart !== undefined;
+
+      if (!died) throw error;
+
+      this.logger.warn('server exited when probed with server/discover; restarting it', {
+        revision,
+      });
+      this.transport.restart?.();
+
+      return {
+        implemented: false,
+        supportedVersions: [],
+        capabilities: undefined,
+        serverInfo: undefined,
+        instructions: undefined,
+        raw: undefined,
+        era: 'legacy',
+        probeCrashedServer: true,
+      };
+    }
+  }
+
+  /**
    * Perform the legacy `initialize` handshake.
    *
    * Only reached when the era probe identified a handshake era server. Returns
@@ -336,7 +385,7 @@ export class McpClient {
     discover: DiscoverOutcome;
   }> {
     const requested = this.options.preferredRevision ?? SUPPORTED_REVISIONS[0];
-    const discover = await this.discover(requested);
+    const discover = await this.discoverOrRestart(requested);
 
     // The era probe said this is a handshake era server (MW-STDIO-008).
     //
@@ -626,6 +675,11 @@ export class McpClient {
         if (!(error instanceof TransportError || error instanceof TimeoutError)) throw error;
 
         if (attempt === retries) break;
+
+        // A server process that has exited will not answer a retry either. Each
+        // one failed instantly, after a growing backoff, and only delayed the
+        // real report.
+        if (this.transport.isRunning === false) break;
 
         const delay = backoff * 2 ** attempt;
         this.logger.debug('retrying after transport failure', { method, attempt, delay });

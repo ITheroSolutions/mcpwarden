@@ -230,3 +230,21 @@ describe('a legacy server strict about the handshake', () => {
     expect(captured.surface.descriptors.map((d) => d.identity)).toContain('strict_tool');
   }, 30_000);
 });
+
+describe('a legacy server that the era probe crashes', () => {
+  // Observed on a real server built on an older Python SDK: server/discover
+  // failed validation and the process exited instead of replying. Crashing on
+  // the probe proves the server is not modern, so it is restarted and captured
+  // down the legacy path rather than the whole capture failing.
+  const STRICT = fileURLToPath(new URL('../fixtures/servers/legacy-strict.mjs', import.meta.url));
+
+  it('is restarted and captured at the legacy revision', async () => {
+    const captured = await connect(STRICT, { LEGACY_STRICT_CRASH_ON_UNKNOWN: '1' }).capture(
+      serverRef(STRICT, 'crashes'),
+      'stdio',
+    );
+
+    expect(captured.surface.revisionUsed).toBe('2025-11-25');
+    expect(captured.surface.descriptors.map((d) => d.identity)).toContain('strict_tool');
+  }, 30_000);
+});
