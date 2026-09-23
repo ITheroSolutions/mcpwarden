@@ -9,6 +9,11 @@
 # Binary fixtures are listed explicitly so nothing here can corrupt them.
 * text=auto eol=lf
 
+# Batch files are parsed by cmd.exe, which has long standing bugs with LF only
+# line endings. The launch tests execute one.
+*.cmd text eol=crlf
+*.bat text eol=crlf
+
 *.png binary
 *.jpg binary
 *.gif binary

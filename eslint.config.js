@@ -12,6 +12,9 @@ export default tseslint.config(
       // part of the compiled package, so they are outside the tsconfig project
       // and cannot be type-aware linted.
       'test/fixtures/servers/**',
+      // Likewise the launch test's batch shim target, which is executed, not
+      // imported.
+      'test/fixtures/shim/**',
       'examples/**',
       'docs/api/**',
       // Build scripts are plain JavaScript that import from dist, so they are

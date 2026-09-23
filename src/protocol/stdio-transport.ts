@@ -27,6 +27,7 @@ import { platform } from 'node:process';
 import { CancellationError, TimeoutError, TransportError } from '../core/errors.js';
 import { isJsonNumber, parseJsonPreservingNumbers, type JsonValue } from '../core/json-parse.js';
 import { NOOP_LOGGER, type Logger } from '../core/logger.js';
+import { childEnvironment, planLaunch } from './launch.js';
 import { serializeForStdio } from './messages.js';
 
 /** How long to wait for a graceful exit before forcing termination. */
@@ -51,6 +52,12 @@ export interface StdioTransportOptions {
   readonly cwd?: string;
   readonly logger?: Logger;
   readonly maxLineBytes?: number;
+  /**
+   * Whether the child also inherits the non secret variables that describe this
+   * machine's layout, such as `PATH` and `SYSTEMROOT`. See `childEnvironment`.
+   * Default true. Credentials are never inherited either way.
+   */
+  readonly inheritBaseEnvironment?: boolean;
 }
 
 interface PendingRequest {
@@ -93,19 +100,33 @@ export class StdioTransport {
       throw new TransportError('Transport already started');
     }
 
+    // Inheriting the parent environment wholesale would leak every credential
+    // this process holds into an untrusted child. The child gets what the caller
+    // named, plus an allowlist of variables that say where things are on this
+    // machine and carry no secrets.
+    const env =
+      this.options.inheritBaseEnvironment === false
+        ? { ...this.options.env }
+        : childEnvironment(process.env, this.options.env ?? {}, platform);
+
+    // Never route through a shell. The command and its arguments come from a
+    // configuration file this package did not write. On Windows a batch file
+    // such as npx.cmd can only run under cmd.exe, and planLaunch builds that
+    // invocation with every argument escaped; see launch.ts.
+    const plan = planLaunch(this.options.command, this.options.args ?? [], {
+      platform,
+      env: process.env,
+      ...(this.options.cwd === undefined ? {} : { cwd: this.options.cwd }),
+    });
+
     try {
-      this.child = spawn(this.options.command, [...(this.options.args ?? [])], {
+      this.child = spawn(plan.file, [...plan.args], {
         stdio: ['pipe', 'pipe', 'pipe'],
-        // Inheriting the parent environment wholesale would leak every
-        // credential this process holds into an untrusted child. Only what the
-        // caller named is passed.
-        env: { ...this.options.env },
+        env,
         ...(this.options.cwd === undefined ? {} : { cwd: this.options.cwd }),
-        // Never route through a shell. The command and its arguments come from a
-        // configuration file this package did not write, and a shell would turn
-        // an argument containing a semicolon into arbitrary code execution.
         shell: false,
         windowsHide: true,
+        windowsVerbatimArguments: plan.windowsVerbatimArguments,
       });
     } catch (cause) {
       throw new TransportError(`Failed to spawn ${this.options.command}`, {
@@ -125,7 +146,36 @@ export class StdioTransport {
       this.onStderr(chunk);
     });
 
+    // A write to a server that has already died raises EPIPE on stdin. Without a
+    // listener that is an uncaught exception that takes the whole CLI down; the
+    // exit handler below is what reports the death.
+    this.child.stdin.on('error', (error) => {
+      this.logger.debug('server stdin closed', { message: error.message });
+    });
+
     this.child.on('error', (error) => {
+      const child = this.child;
+
+      // No pid means the process never started. That is final: mark it exited so
+      // every request fails at once with the reason, rather than each one being
+      // written to a process that does not exist and timing out long after.
+      if (child?.pid === undefined) {
+        const code = (error as NodeJS.ErrnoException).code;
+        this.exited = true;
+        this.exitReason =
+          code === 'ENOENT'
+            ? `could not be started: the command ${JSON.stringify(this.options.command)} was not found`
+            : `could not be started: ${error.message}`;
+
+        this.failAll(
+          new TransportError(`Server ${this.exitReason}`, {
+            cause: error,
+            details: { command: this.options.command, code },
+          }),
+        );
+        return;
+      }
+
       this.failAll(new TransportError(`Child process error: ${error.message}`, { cause: error }));
     });
 
@@ -317,6 +367,34 @@ export class StdioTransport {
         });
       }
     });
+  }
+
+  /**
+   * Send a notification: a message with no id, which gets no response.
+   *
+   * `request` refuses a message without an id, correctly, since it would wait
+   * for a reply that never comes. Notifications need their own path.
+   */
+  notify(message: Record<string, unknown>): Promise<void> {
+    const child = this.child;
+
+    if (child === undefined || this.exited) {
+      return Promise.reject(
+        new TransportError(
+          this.exitReason === undefined
+            ? 'Transport is not running'
+            : `Transport is not running: server ${this.exitReason}`,
+        ),
+      );
+    }
+
+    try {
+      child.stdin.write(serializeForStdio(message));
+    } catch (cause) {
+      return Promise.reject(new TransportError('Failed to write to the server stdin', { cause }));
+    }
+
+    return Promise.resolve();
   }
 
   private failAll(error: Error): void {
