@@ -22,6 +22,18 @@ import { DiscoveryError } from '../core/errors.js';
 import { redactionFingerprint, SECRET_ENV_NAME_PATTERN } from '../core/redaction.js';
 import type { AuthPosture, RegistrationSite, ServerEndpoint, ServerRef } from '../core/types.js';
 import type { ClientDefinition, ConfigShape } from './clients.js';
+import { rememberConfiguredValues } from './configured.js';
+
+/** The string valued entries of a configuration object, for `env` and `headers`. */
+function stringValues(value: unknown): Record<string, string> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return {};
+
+  const out: Record<string, string> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (typeof entry === 'string') out[key] = entry;
+  }
+  return out;
+}
 
 /** One server as it appeared in one file, before deduplication. */
 export interface ParsedRegistration {
@@ -146,13 +158,17 @@ function parseEndpoint(
 
     const cwd = entry['cwd'];
 
-    return {
+    const endpoint: ServerEndpoint = {
       transport: 'stdio',
       command,
       args,
       envNames,
       ...(typeof cwd === 'string' ? { cwd } : {}),
     };
+
+    // The values themselves never join the endpoint; see configured.ts.
+    rememberConfiguredValues(endpoint, { env: stringValues(env), headers: {} });
+    return endpoint;
   }
 
   if (typeof url === 'string' && url.length > 0) {
@@ -162,7 +178,9 @@ function parseEndpoint(
         ? Object.keys(headers)
         : [];
 
-    return { transport: 'http', url, headerNames };
+    const endpoint: ServerEndpoint = { transport: 'http', url, headerNames };
+    rememberConfiguredValues(endpoint, { env: {}, headers: stringValues(headers) });
+    return endpoint;
   }
 
   throw new DiscoveryError(

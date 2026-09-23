@@ -28,6 +28,7 @@ import { collectEnvSecrets, type RedactionOptions } from '../core/redaction.js';
 import { SUPPORTED_REVISIONS, TARGET_REVISION } from '../core/revisions.js';
 import type { ServerRef, Severity } from '../core/types.js';
 import { grade } from '../conformance/index.js';
+import { launchSettingsFor } from '../discovery/configured.js';
 import { discover, knownClients, type Inventory } from '../discovery/index.js';
 import { Ledger } from '../ledger/index.js';
 import { analyzeMigration, applyCodemod, codemodFile } from '../migration/index.js';
@@ -820,20 +821,23 @@ function clientFor(
   logger: Logger,
   io: CliIo,
 ): McpClient {
-  if (server.endpoint.transport === 'stdio') {
-    // Only the environment variables the configuration named are passed through.
-    // Handing an untrusted child this process's whole environment would leak
-    // every credential the operator happens to be holding.
-    const env: Record<string, string> = {};
-    for (const name of server.endpoint.envNames) {
-      const value = io.env[name];
-      if (value !== undefined) env[name] = value;
-    }
+  // The server gets what its own configuration entry supplies, with placeholders
+  // such as ${env:NAME} filled from the operator's environment, exactly as its
+  // own client would start it. Nothing else from the operator's environment
+  // reaches it beyond the machine layout allowlist; see launch.ts.
+  const settings = launchSettingsFor(server, io.env);
+  if (settings.unresolved.length > 0) {
+    logger.info('configuration placeholders only the owning client can fill were left out', {
+      server: server.name,
+      placeholders: settings.unresolved,
+    });
+  }
 
+  if (server.endpoint.transport === 'stdio') {
     const transport = new StdioTransport({
       command: server.endpoint.command,
-      args: server.endpoint.args,
-      env,
+      args: settings.args,
+      env: settings.env,
       logger,
       ...(server.endpoint.cwd === undefined ? {} : { cwd: server.endpoint.cwd }),
     });
@@ -842,10 +846,10 @@ function clientFor(
     return new McpClient(transport, { timeoutMs: config.timeoutMs, logger });
   }
 
-  return new McpClient(new HttpTransport({ url: server.endpoint.url, logger }), {
-    timeoutMs: config.timeoutMs,
-    logger,
-  });
+  return new McpClient(
+    new HttpTransport({ url: server.endpoint.url, headers: settings.headers, logger }),
+    { timeoutMs: config.timeoutMs, logger },
+  );
 }
 
 async function resolveCliConfig(flags: GlobalFlags, io: CliIo): Promise<McpWardenConfig> {

@@ -32,6 +32,7 @@ import type {
   ServerSurface,
   TrustPin,
 } from './core/types.js';
+import { launchSettingsFor } from './discovery/configured.js';
 import { discover, type DiscoveryOptions, type Inventory } from './discovery/index.js';
 import { Ledger } from './ledger/index.js';
 import { analyzeMigration, type AnalyzeOptions, type MigrationReport } from './migration/index.js';
@@ -52,11 +53,14 @@ export interface OperationOptions {
   /** Called as each stage of a capture completes. */
   readonly onProgress?: (event: CaptureProgress) => void;
   /**
-   * Environment variables to pass to a stdio server.
+   * Environment variables to pass to a stdio server, on top of what the server's
+   * own configuration entry supplies when the `ServerRef` came from `inventory()`.
    *
-   * Only what is named here reaches the child. The library never hands a server
-   * the host process's whole environment, because that would leak every
-   * credential the host happens to hold into a program it did not write.
+   * Configuration placeholders such as `${env:NAME}` are filled only from here.
+   * The library never reads the host process's environment on the caller's
+   * behalf, and never hands a server that environment wholesale, because that
+   * would leak every credential the host happens to hold into a program it did
+   * not write.
    */
   readonly env?: Readonly<Record<string, string>>;
 }
@@ -80,11 +84,17 @@ export class ServerSession {
     const logger = options.logger ?? NOOP_LOGGER;
     const timeoutMs = options.timeoutMs ?? 30_000;
 
+    // What the server's own configuration supplies, when the ServerRef came from
+    // inventory(). Placeholders are filled only from `options.env`: the library
+    // never reads the host process environment on the caller's behalf.
+    const explicit = options.env ?? {};
+    const settings = launchSettingsFor(server, explicit, explicit);
+
     if (server.endpoint.transport === 'stdio') {
       const transport = new StdioTransport({
         command: server.endpoint.command,
-        args: server.endpoint.args,
-        env: options.env ?? {},
+        args: settings.args,
+        env: settings.env,
         logger,
         ...(server.endpoint.cwd === undefined ? {} : { cwd: server.endpoint.cwd }),
       });
@@ -103,7 +113,7 @@ export class ServerSession {
     }
 
     return new ServerSession(
-      new McpClient(new HttpTransport({ url: server.endpoint.url, logger }), {
+      new McpClient(new HttpTransport({ url: server.endpoint.url, headers: settings.headers, logger }), {
         timeoutMs,
         logger,
         ...(options.signal === undefined ? {} : { signal: options.signal }),
