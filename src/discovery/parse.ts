@@ -19,7 +19,7 @@
  */
 
 import { DiscoveryError } from '../core/errors.js';
-import { redactionFingerprint, SECRET_ENV_NAME_PATTERN } from '../core/redaction.js';
+import { isSecretName, redactionFingerprint } from '../core/redaction.js';
 import type { AuthPosture, RegistrationSite, ServerEndpoint, ServerRef } from '../core/types.js';
 import type { ClientDefinition, ConfigShape } from './clients.js';
 import { rememberConfiguredValues } from './configured.js';
@@ -92,8 +92,7 @@ export function isInlineCredential(key: string, value: string): boolean {
   if (ENV_REFERENCE.test(value)) return false;
   if (value.length < 8) return false;
 
-  SECRET_ENV_NAME_PATTERN.lastIndex = 0;
-  if (SECRET_ENV_NAME_PATTERN.test(key)) return true;
+  if (isSecretName(key)) return true;
 
   // An Authorization style header value carries a credential regardless of the
   // key naming convention in use.
@@ -131,12 +130,23 @@ function scanUrlQuery(endpoint: ServerEndpoint, report: (value: string) => void)
   }
 
   for (const [key, value] of params) {
-    if (isInlineCredential(key, value) || JWT_SHAPE.test(value)) report(value);
+    if (isInlineCredential(key, value) || looksLikeJwt(value)) report(value);
   }
 }
 
-/** Three base64url segments separated by dots. */
-const JWT_SHAPE = /^[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}$/;
+/**
+ * A signed (three segment) or encrypted (five segment) JSON Web Token.
+ *
+ * The first real token found in a configured URL was an encrypted one, five
+ * segments, and the three segment check missed it, so the server was reported
+ * as carrying no credential.
+ */
+function looksLikeJwt(value: string): boolean {
+  const segments = value.split('.');
+  if (segments.length !== 3 && segments.length !== 5) return false;
+  if (!segments.every((segment) => /^[A-Za-z0-9_-]*$/.test(segment))) return false;
+  return value.startsWith('eyJ') && value.length >= 40;
+}
 
 function parseEndpoint(
   name: string,
@@ -209,8 +219,7 @@ function classifyAuth(
   if (typeof url === 'string' && /\boauth\b/i.test(url)) return 'oauth';
 
   const secretNamed = [...envNames, ...headerNames].some((name) => {
-    SECRET_ENV_NAME_PATTERN.lastIndex = 0;
-    return SECRET_ENV_NAME_PATTERN.test(name);
+    return isSecretName(name);
   });
 
   if (secretNamed) return 'env';

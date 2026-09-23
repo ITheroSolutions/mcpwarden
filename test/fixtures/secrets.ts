@@ -182,6 +182,21 @@ export const SECRET_FIXTURES: readonly SecretFixture[] = [
     context: 'payload VGhpc0lzTm90QVJlYWxTZWNyZXQxMjM0NTY3ODkwQUJDREVG end',
     preserved: 'end',
   },
+  {
+    // Shaped like the first real token found in a configured URL: an encrypted
+    // JWT, five segments, the last one short. Its first three segments were
+    // redacted as a JWT, the fourth as a base64 blob, and the fifth printed.
+    name: 'encrypted JWT (JWE) in a URL query',
+    secret:
+      'eyJhbGciOiJSU0EtT0FFUCIsImVuYyI6IkEyNTZHQ00ifQ.abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ01.q1w2e3r4t5y6u7i8.' +
+      'Z9y8X7w6V5u4T3s2R1q0P9o8N7m6L5k4J3i2H1g0F9e8D7c6B5a4Z3y2X1w0V9u8T7s6R5q4P3o2N1m0L9k8J7i6H5g4F3e2D1c0B9a8Z7y6X5w4V3u2T1s0R9q8P7o6N5m4L3k2J1i0H9g8F7e6D5c4B3a2Z1y0X9w8V7u6T5s4R3q2P1o0N9m8L7k6J5i4H3g2F1e0D9c8B7a6.' +
+      'Zz9Yy8Xx7Ww6Vv5Uu4Tt3S',
+    context:
+      'https://design.example.com/mcp/stream?userToken=eyJhbGciOiJSU0EtT0FFUCIsImVuYyI6IkEyNTZHQ00ifQ.abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ01.q1w2e3r4t5y6u7i8.' +
+      'Z9y8X7w6V5u4T3s2R1q0P9o8N7m6L5k4J3i2H1g0F9e8D7c6B5a4Z3y2X1w0V9u8T7s6R5q4P3o2N1m0L9k8J7i6H5g4F3e2D1c0B9a8Z7y6X5w4V3u2T1s0R9q8P7o6N5m4L3k2J1i0H9g8F7e6D5c4B3a2Z1y0X9w8V7u6T5s4R3q2P1o0N9m8L7k6J5i4H3g2F1e0D9c8B7a6.' +
+      'Zz9Yy8Xx7Ww6Vv5Uu4Tt3S',
+    preserved: 'design.example.com/mcp/stream',
+  },
 ];
 
 /**

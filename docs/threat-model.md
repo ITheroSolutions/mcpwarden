@@ -126,14 +126,22 @@ indefinitely.
 
 **Credentials reaching output, against all four adversaries.** Every outbound string
 passes through `redact`. Seventeen vendor key prefix families, PEM private key blocks,
-JSON Web Tokens, bearer and basic authorization values, connection string userinfo,
-secret shaped assignments, values drawn from secret named environment variables, and a
-generic high entropy catch-all for base64 and hex runs. `ServerRef` carries environment
-variable *names* only; values never enter the type that gets rendered.
+JSON Web Tokens in both their signed three segment and encrypted five segment forms,
+bearer and basic authorization values, connection string userinfo, secret shaped
+assignments, values drawn from secret named environment variables, and a generic high
+entropy catch-all for base64 and hex runs. A secret shaped assignment is redacted whole
+even when an earlier step had already redacted part of its value: the first real token
+this was run against had four of its five segments caught and the fifth printed, and
+every fixture is now tested for surviving fragments, not only for the whole secret.
+`ServerRef` carries environment variable *names* only; values never enter the type that
+gets rendered.
 
 **Inline credentials in client configs being missed, against a user's own mistake.**
 Detection is structural: a secret named key whose value is not an environment reference
-and is long enough to be a credential. The value is never stored, only an eight
+and is long enough to be a credential, in `env`, in `headers`, or in the endpoint URL's
+query string. Names are recognised in upper snake case, camelCase and hyphenated form,
+so `API_KEY`, `userToken` and `X-Api-Key` all count, and a JWT in a query string is
+recognised by its shape whatever it is called. The value is never stored, only an eight
 character fingerprint, so the finding can be reported and correlated across files
 without the credential ever entering a report.
 

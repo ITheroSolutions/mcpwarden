@@ -80,7 +80,7 @@ export interface RedactionOptions {
  * credential.
  */
 export const SECRET_ENV_NAME_PATTERN =
-  /(^|_)(SECRET|TOKEN|PASSWORD|PASSWD|PWD|APIKEY|API_KEY|ACCESS_KEY|PRIVATE_KEY|CLIENT_SECRET|AUTH|CREDENTIAL|CREDENTIALS|SESSION|COOKIE|SIGNING_KEY|ENCRYPTION_KEY|PASSPHRASE|BEARER|OAUTH|REFRESH_TOKEN|SALT|DSN|CONNECTION_STRING)($|_)/i;
+  /(^|_)(SECRET|TOKEN|PASSWORD|PASSWD|PWD|APIKEY|API_KEY|ACCESS_KEY|PRIVATE_KEY|CLIENT_SECRET|AUTH|AUTHORIZATION|CREDENTIAL|CREDENTIALS|SESSION|COOKIE|SIGNING_KEY|ENCRYPTION_KEY|PASSPHRASE|BEARER|OAUTH|REFRESH_TOKEN|SALT|DSN|CONNECTION_STRING)($|_)/i;
 
 /**
  * Environment variable names that match {@link SECRET_ENV_NAME_PATTERN} but are
@@ -141,6 +141,39 @@ function alreadyHandled(value: string): boolean {
 }
 
 /**
+ * Whether a value consists of nothing but redaction tokens and separators.
+ *
+ * Distinct from {@link alreadyHandled}, which is true when *any* part was handled.
+ * A secret assignment whose value an earlier step had only partly redacted was
+ * skipped as handled, and the rest printed in clear: a five segment token in a
+ * URL query had three segments caught as a JWT, one as a base64 blob, and its
+ * last 22 characters left visible. Only a value with nothing left over counts as
+ * done.
+ */
+function fullyHandled(value: string): boolean {
+  if (value.includes(PARK_SENTINEL)) return true;
+  return value.replace(EXISTING_TOKEN, '').replace(/[.\-_:]/g, '').length === 0;
+}
+
+/**
+ * Whether a name looks like it holds a secret, in any naming convention.
+ *
+ * {@link SECRET_ENV_NAME_PATTERN} is written for environment variables, which are
+ * upper snake case. Configuration files and URLs use camelCase and hyphens as
+ * well, so `userToken`, `apiKey` and `X-Api-Key` did not match and a token in a
+ * URL query went unrecognised. The name is normalised to upper snake case first:
+ * `userToken` to `USER_TOKEN`, `X-Api-Key` to `X_API_KEY`.
+ */
+export function isSecretName(name: string): boolean {
+  const normalised = name
+    .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
+    .replace(/[-.\s]+/g, '_');
+
+  SECRET_ENV_NAME_PATTERN.lastIndex = 0;
+  return SECRET_ENV_NAME_PATTERN.test(normalised);
+}
+
+/**
  * Known credential prefixes, longest first so that `sk-ant-` wins over `sk-`.
  *
  * Each entry is a literal prefix and the character class that may follow it. These
@@ -183,8 +216,15 @@ const PREFIXED_KEY_PATTERNS: readonly { readonly label: string; readonly pattern
 const PEM_BLOCK =
   /-----BEGIN[ A-Z0-9]*(?:PRIVATE KEY|RSA PRIVATE KEY|OPENSSH PRIVATE KEY|PGP PRIVATE KEY BLOCK|ENCRYPTED PRIVATE KEY)-----[\s\S]*?-----END[ A-Z0-9]*(?:PRIVATE KEY|RSA PRIVATE KEY|OPENSSH PRIVATE KEY|PGP PRIVATE KEY BLOCK|ENCRYPTED PRIVATE KEY)-----/g;
 
-/** JSON Web Tokens. Three base64url segments separated by dots. */
-const JWT = /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g;
+/**
+ * JSON Web Tokens: three base64url segments separated by dots, or five for an
+ * encrypted token (JWE), whose second segment is empty when the key is agreed
+ * directly. The five segment form is tried first. With only the three segment
+ * pattern, an encrypted token had its first three segments redacted as one JWT
+ * and the rest left to the generic heuristics, which missed the shortest.
+ */
+const JWT =
+  /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]*\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}|\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g;
 
 /**
  * Credentials embedded in a URL userinfo component, for example
@@ -265,7 +305,7 @@ export function collectEnvSecrets(env: Readonly<Record<string, string | undefine
     if (value === undefined) continue;
     if (value.length < MIN_ENV_SECRET_LENGTH) continue;
     if (SECRET_ENV_NAME_EXCEPTIONS.has(name.toUpperCase())) continue;
-    if (!SECRET_ENV_NAME_PATTERN.test(name)) continue;
+    if (!isSecretName(name)) continue;
     secrets.push(value);
   }
 
@@ -352,7 +392,7 @@ export function redact(input: string, options: RedactionOptions = {}): string {
   text = text.replace(
     SECRET_ASSIGNMENT,
     (match, key: string, separator: string, value: string) =>
-      alreadyHandled(value) ? match : `${key}${separator}${token('VALUE', value)}`,
+      fullyHandled(value) ? match : `${key}${separator}${token('VALUE', value)}`,
   );
 
   // Step 9. Generic high entropy blobs.

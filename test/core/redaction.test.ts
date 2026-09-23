@@ -18,6 +18,16 @@ describe('redact: every fixture shape', () => {
         expect(output).not.toContain(fixture.secret);
       });
 
+      it('leaves no fragment of the secret behind', () => {
+        // Checking only for the whole secret let a partial leak pass: a real
+        // token had four of its five segments redacted and the fifth printed.
+        const output = redact(fixture.context);
+        for (const fragment of fixture.secret.split(/[^A-Za-z0-9]+/)) {
+          if (fragment.length < 12) continue;
+          expect(output, `a fragment of ${fixture.name} survived`).not.toContain(fragment);
+        }
+      });
+
       // A contextual-only secret is one that is indistinguishable from ordinary
       // text on its own, such as a connection string password. What identifies it
       // is its position, not its content. Requiring isolated detection would mean
