@@ -76,17 +76,17 @@ describe('one call operations', () => {
   });
 
   it('pins a server', async () => {
-    const pin = await trustServer(fixtureServer(), 'tyler', {
+    const pin = await trustServer(fixtureServer(), 'reviewer', {
       env: envFor('conforming'),
       note: 'reviewed',
     });
 
-    expect(pin.approvedBy).toBe('tyler');
+    expect(pin.approvedBy).toBe('reviewer');
     expect(pin.note).toBe('reviewed');
   });
 
   it('reports no drift against a pin of the same server', async () => {
-    const pin = await trustServer(fixtureServer(), 'tyler', { env: envFor('conforming') });
+    const pin = await trustServer(fixtureServer(), 'reviewer', { env: envFor('conforming') });
     const { report } = await diffServer(fixtureServer(), pin, { env: envFor('conforming') });
 
     expect(report.events).toEqual([]);
@@ -94,7 +94,7 @@ describe('one call operations', () => {
 
   it('detects drift when the server changed', async () => {
     // The duplicate-tool mode changes the advertised surface.
-    const pin = await trustServer(fixtureServer(), 'tyler', { env: envFor('conforming') });
+    const pin = await trustServer(fixtureServer(), 'reviewer', { env: envFor('conforming') });
 
     await expect(
       diffServer(fixtureServer(), pin, { env: envFor('bad-header-number') }),
@@ -246,7 +246,7 @@ describe('ledger integration', () => {
 describe('pin helpers', () => {
   it('creates a pin from an already captured surface', async () => {
     const surface = await captureServer(fixtureServer(), { env: envFor('conforming') });
-    const pin = createPin(surface, { approvedBy: 'tyler' });
+    const pin = createPin(surface, { approvedBy: 'reviewer' });
 
     expect(pin.surfaceRoot).toBe(surface.hashes.root);
   });

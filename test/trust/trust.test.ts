@@ -62,19 +62,19 @@ const LOOKUP = '{"name":"lookup","description":"Looks up a term.","inputSchema":
 describe('pins', () => {
   it('records what was approved, by whom and when', () => {
     const pin = createPin(surfaceOf([LOOKUP]), {
-      approvedBy: 'tyler',
+      approvedBy: 'reviewer',
       approvedAt: '2026-07-31T00:00:00.000Z',
       note: 'reviewed the tool text',
     });
 
-    expect(pin.approvedBy).toBe('tyler');
+    expect(pin.approvedBy).toBe('reviewer');
     expect(pin.note).toBe('reviewed the tool text');
     expect(pin.surfaceRoot).toMatch(/^sha256:[a-f0-9]{64}$/);
   });
 
   it('round trips through disk', async () => {
     const path = join(root, 'pins', 'srv.pin.json');
-    const pin = createPin(surfaceOf([LOOKUP]), { approvedBy: 'tyler' });
+    const pin = createPin(surfaceOf([LOOKUP]), { approvedBy: 'reviewer' });
 
     await savePin(path, pin);
     expect(await loadPin(path)).toEqual(pin);
@@ -86,7 +86,7 @@ describe('pins', () => {
 
   it('stores hashes rather than a copy of the surface', () => {
     // A pin should not be a copy of a server's surface sitting in a file.
-    const pin = createPin(surfaceOf([LOOKUP]), { approvedBy: 'tyler' });
+    const pin = createPin(surfaceOf([LOOKUP]), { approvedBy: 'reviewer' });
     expect(JSON.stringify(pin)).not.toContain('Looks up a term');
   });
 });
@@ -94,7 +94,7 @@ describe('pins', () => {
 describe('an unchanged server', () => {
   it('produces no drift events', () => {
     const surface = surfaceOf([LOOKUP]);
-    const pin = createPin(surface, { approvedBy: 'tyler' });
+    const pin = createPin(surface, { approvedBy: 'reviewer' });
 
     const report = diffAgainstPin(surfaceOf([LOOKUP]), pin);
 
@@ -104,13 +104,13 @@ describe('an unchanged server', () => {
   });
 
   it('reports no highest risk when clean', () => {
-    const pin = createPin(surfaceOf([LOOKUP]), { approvedBy: 'tyler' });
+    const pin = createPin(surfaceOf([LOOKUP]), { approvedBy: 'reviewer' });
     expect(highestRisk(diffAgainstPin(surfaceOf([LOOKUP]), pin))).toBeUndefined();
   });
 });
 
 describe('classification against a pin', () => {
-  const pin = createPin(surfaceOf([LOOKUP]), { approvedBy: 'tyler' });
+  const pin = createPin(surfaceOf([LOOKUP]), { approvedBy: 'reviewer' });
 
   it('detects an added tool', () => {
     const report = diffAgainstPin(surfaceOf([LOOKUP, '{"name":"newcomer"}']), pin);
@@ -228,7 +228,7 @@ describe('name collision detection', () => {
     // wrong one.
     const mine = surfaceOf(['{"name":"search"}'], 'mine');
     const theirs = surfaceOf(['{"name":"search"}'], 'theirs');
-    const pin = createPin(mine, { approvedBy: 'tyler' });
+    const pin = createPin(mine, { approvedBy: 'reviewer' });
 
     const report = diffAgainstPin(mine, pin, { otherSurfaces: [theirs] });
     expect(report.events.map((e) => e.kind)).toContain('name-collision');
@@ -237,7 +237,7 @@ describe('name collision detection', () => {
   it('flags a near miss differing only by separators or case', () => {
     const mine = surfaceOf(['{"name":"read_file"}'], 'mine');
     const theirs = surfaceOf(['{"name":"ReadFile"}'], 'theirs');
-    const pin = createPin(mine, { approvedBy: 'tyler' });
+    const pin = createPin(mine, { approvedBy: 'reviewer' });
 
     const report = diffAgainstPin(mine, pin, { otherSurfaces: [theirs] });
     expect(report.events.map((e) => e.kind)).toContain('name-collision');
@@ -245,7 +245,7 @@ describe('name collision detection', () => {
 
   it('does not flag a server colliding with itself', () => {
     const mine = surfaceOf(['{"name":"search"}'], 'mine');
-    const pin = createPin(mine, { approvedBy: 'tyler' });
+    const pin = createPin(mine, { approvedBy: 'reviewer' });
 
     const report = diffAgainstPin(mine, pin, { otherSurfaces: [mine] });
     expect(report.events).toEqual([]);
@@ -254,7 +254,7 @@ describe('name collision detection', () => {
   it('does not flag unrelated names', () => {
     const mine = surfaceOf(['{"name":"alpha"}'], 'mine');
     const theirs = surfaceOf(['{"name":"beta"}'], 'theirs');
-    const pin = createPin(mine, { approvedBy: 'tyler' });
+    const pin = createPin(mine, { approvedBy: 'reviewer' });
 
     expect(diffAgainstPin(mine, pin, { otherSurfaces: [theirs] }).events).toEqual([]);
   });
