@@ -26,6 +26,8 @@ import { redact, redactDeep, type RedactionOptions } from './redaction.js';
 export const ERROR_CODES = [
   /** A transport could not be established, or died mid exchange. */
   'TRANSPORT_FAILURE',
+  /** The server refused the request until the caller signs in. */
+  'AUTHENTICATION_REQUIRED',
   /** The peer sent something the protocol does not permit. */
   'PROTOCOL_VIOLATION',
   /** No mutually supported protocol revision exists. */
@@ -165,6 +167,22 @@ function describeUnknown(value: unknown): string {
 export class TransportError extends McpWardenError {
   constructor(message: string, options?: McpWardenErrorOptions) {
     super('TRANSPORT_FAILURE', message, options);
+  }
+}
+
+/**
+ * The server answered HTTP 401 or 403: it will not describe itself to a caller
+ * that has not signed in.
+ *
+ * Deliberately not a {@link TransportError}. The connection worked and the server
+ * answered clearly, so retrying cannot change the outcome, and reporting it as a
+ * transport failure sent people looking for a network problem that did not
+ * exist. Most hosted MCP servers behave this way, so it is the single most
+ * common result of pointing mcpwarden at a real machine.
+ */
+export class AuthenticationRequiredError extends McpWardenError {
+  constructor(message: string, options?: McpWardenErrorOptions) {
+    super('AUTHENTICATION_REQUIRED', message, options);
   }
 }
 

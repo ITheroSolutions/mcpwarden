@@ -33,6 +33,7 @@ export {
 export type { RedactionOptions } from './core/redaction.js';
 
 export {
+  AuthenticationRequiredError,
   CancellationError,
   ConfigurationError,
   DiscoveryError,

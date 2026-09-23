@@ -22,7 +22,13 @@
  * keeps the status line and headers so the conformance engine can grade them.
  */
 
-import { CancellationError, TimeoutError, TransportError } from '../core/errors.js';
+import {
+  AuthenticationRequiredError,
+  CancellationError,
+  McpWardenError,
+  TimeoutError,
+  TransportError,
+} from '../core/errors.js';
 import { parseJsonPreservingNumbers, type JsonValue } from '../core/json-parse.js';
 import { NOOP_LOGGER, type Logger } from '../core/logger.js';
 import type { ProtocolRevision } from '../core/revisions.js';
@@ -74,6 +80,24 @@ export class HttpTransport {
   private readonly maxResponseBytes: number;
   private disposed = false;
 
+  /**
+   * Set only by a legacy `initialize` handshake.
+   *
+   * The 2026-07-28 revision has no sessions (MW-HTTP-012), but the handshake era
+   * revisions this package still captures do: the server issues an
+   * `Mcp-Session-Id` in its `initialize` response and refuses every later request
+   * that does not carry it, answering "Server not initialized". Without this, no
+   * session based legacy server could be captured over HTTP at all.
+   */
+  private sessionId: string | undefined;
+
+  /**
+   * The revision a legacy handshake settled on. Legacy requests carry no `_meta`
+   * revision, and without this their `MCP-Protocol-Version` header would claim
+   * 2026-07-28, which a strict legacy server rejects with 400.
+   */
+  private negotiatedRevision: string | undefined;
+
   constructor(private readonly options: HttpTransportOptions) {
     this.logger = options.logger ?? NOOP_LOGGER;
     this.maxResponseBytes = options.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES;
@@ -91,6 +115,25 @@ export class HttpTransport {
   ): Promise<JsonValue> {
     const response = await this.rawRequest(message, { timeoutMs, ...(signal ? { signal } : {}) });
 
+    // Checked before the body is interpreted at all. Servers phrase a refusal in
+    // every shape: a vendor JSON error, a plain string, even a JSON-RPC error. The
+    // status is the one signal they agree on.
+    if (response.status === 401 || response.status === 403) {
+      throw new AuthenticationRequiredError(
+        `${this.host} requires you to sign in before it will describe itself (HTTP ${String(response.status)}). ` +
+          'mcpwarden does not sign in to servers, so it cannot see what this one advertises.',
+        {
+          details: {
+            status: response.status,
+            host: this.host,
+            // A WWW-Authenticate challenge usually means OAuth. Recorded so a
+            // report can say what kind of sign in the server expects.
+            challenge: response.headers['www-authenticate'] !== undefined,
+          },
+        },
+      );
+    }
+
     if (response.message === undefined) {
       throw new TransportError(
         `Server returned HTTP ${String(response.status)} with no JSON-RPC message`,
@@ -99,6 +142,27 @@ export class HttpTransport {
     }
 
     return response.message;
+  }
+
+  /**
+   * Send a notification. The server answers `202 Accepted` with no body
+   * (MW-HTTP-006), so there is nothing to return.
+   */
+  async notify(
+    message: Record<string, unknown>,
+    timeoutMs: number,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    await this.rawRequest(message, { timeoutMs, ...(signal ? { signal } : {}) });
+  }
+
+  /** The endpoint's host, safe to print. The full URL can carry a token in its query. */
+  private get host(): string {
+    try {
+      return new URL(this.options.url).host;
+    } catch {
+      return 'the server';
+    }
   }
 
   /**
@@ -148,7 +212,9 @@ export class HttpTransport {
         redirect: 'manual',
       });
 
-      return await this.readResponse(response);
+      const exchange = await this.readResponse(response);
+      if (method === 'initialize') this.observeHandshake(exchange);
+      return exchange;
     } catch (error) {
       if (options.signal?.aborted === true) {
         throw new CancellationError('Request cancelled by the caller');
@@ -160,10 +226,12 @@ export class HttpTransport {
         });
       }
 
-      throw new TransportError(
-        `HTTP request failed: ${error instanceof Error ? error.message : 'unknown error'}`,
-        { details: { method }, cause: error },
-      );
+      if (error instanceof McpWardenError) throw error;
+
+      throw new TransportError(`Could not reach ${this.host}: ${describeNetworkFailure(error)}`, {
+        details: { method, host: this.host, code: networkErrorCode(error) },
+        cause: error,
+      });
     } finally {
       clearTimeout(timer);
       options.signal?.removeEventListener('abort', onAbort);
@@ -174,15 +242,40 @@ export class HttpTransport {
     message: Record<string, unknown>,
     method: string,
   ): Record<string, string> {
-    const revision = this.options.revision ?? this.revisionFromMessage(message);
+    const revision = this.options.revision ?? this.revisionFromMessage(message, method);
     const params = message['params'];
     const name = readNameForHeader(params, method);
 
-    return buildHttpHeaders({
+    const headers = buildHttpHeaders({
       revision,
       method,
       ...(name === undefined ? {} : { name }),
     });
+
+    if (this.sessionId !== undefined) headers['Mcp-Session-Id'] = this.sessionId;
+
+    return headers;
+  }
+
+  /**
+   * Remember what a legacy `initialize` handshake established: the session the
+   * server issued, and the revision it agreed to.
+   */
+  private observeHandshake(exchange: RawHttpResponse): void {
+    if (exchange.status < 200 || exchange.status >= 300) return;
+
+    const session = exchange.headers['mcp-session-id'];
+    // The session id must be visible ASCII; anything else is not echoed back.
+    if (session !== undefined && /^[\x21-\x7e]{1,512}$/.test(session)) this.sessionId = session;
+
+    const message = exchange.message;
+    if (typeof message === 'object' && message !== null && !Array.isArray(message)) {
+      const result = (message as Record<string, unknown>)['result'];
+      if (typeof result === 'object' && result !== null) {
+        const version = (result as Record<string, unknown>)['protocolVersion'];
+        if (typeof version === 'string') this.negotiatedRevision = version;
+      }
+    }
   }
 
   /**
@@ -192,16 +285,25 @@ export class HttpTransport {
    * `_meta` value, so taking it from anywhere else would risk sending a request
    * that is non conforming by construction.
    */
-  private revisionFromMessage(message: Record<string, unknown>): ProtocolRevision {
+  private revisionFromMessage(message: Record<string, unknown>, method: string): ProtocolRevision {
     const params = message['params'];
 
     if (typeof params === 'object' && params !== null) {
-      const meta = (params as Record<string, unknown>)['_meta'];
+      const record = params as Record<string, unknown>;
+      const meta = record['_meta'];
       if (typeof meta === 'object' && meta !== null) {
         const version = (meta as Record<string, unknown>)['io.modelcontextprotocol/protocolVersion'];
         if (typeof version === 'string') return version as ProtocolRevision;
       }
+
+      // A legacy handshake carries its revision in the body instead of `_meta`.
+      if (method === 'initialize' && typeof record['protocolVersion'] === 'string') {
+        return record['protocolVersion'] as ProtocolRevision;
+      }
     }
+
+    // Every later legacy request speaks the revision the handshake agreed.
+    if (this.negotiatedRevision !== undefined) return this.negotiatedRevision as ProtocolRevision;
 
     return '2026-07-28';
   }
@@ -235,6 +337,16 @@ export class HttpTransport {
       // A body that is not JSON is itself a finding for the conformance engine.
       // The exchange is returned intact so the engine can grade it.
       this.logger.debug('response body was not valid JSON', { status: response.status });
+      message = undefined;
+    }
+
+    // Valid JSON is not necessarily a JSON-RPC message. Hosted servers answer an
+    // unauthenticated request with their own error shapes, such as
+    // `{"error":"invalid_token"}` or `{"message":"Unauthorized"}`, and treating
+    // those as protocol messages produced the baffling report "returned neither
+    // a result nor an error". The body stays in `bodyText` for grading.
+    if (message !== undefined && !looksLikeJsonRpc(message)) {
+      this.logger.debug('response body was JSON but not JSON-RPC', { status: response.status });
       message = undefined;
     }
 
@@ -277,9 +389,100 @@ export class HttpTransport {
     return text + decoder.decode();
   }
 
-  dispose(): Promise<void> {
+  async dispose(): Promise<void> {
+    if (this.disposed) return;
+
+    // A legacy session is closed explicitly, which the handshake era revisions
+    // ask clients to do. Best effort only: disposal must never hang or throw on
+    // account of a server that has already gone.
+    if (this.sessionId !== undefined) {
+      try {
+        await this.rawRequest(
+          {},
+          {
+            timeoutMs: 2_000,
+            httpMethod: 'DELETE',
+            headers: {
+              'Mcp-Session-Id': this.sessionId,
+              ...(this.negotiatedRevision === undefined
+                ? {}
+                : { 'MCP-Protocol-Version': this.negotiatedRevision }),
+            },
+          },
+        );
+      } catch {
+        // Nothing useful to do; the session will expire on the server.
+      }
+    }
+
     this.disposed = true;
-    return Promise.resolve();
+  }
+}
+
+/**
+ * Whether a parsed body is shaped like a JSON-RPC message at all.
+ *
+ * Deliberately loose: a response missing `jsonrpc` but carrying a `result` is
+ * still a JSON-RPC answer, a malformed one the conformance engine needs to see.
+ * What is excluded is JSON with none of the markers, and an `error` that is a
+ * plain string, which JSON-RPC never uses and vendor error bodies often do.
+ */
+function looksLikeJsonRpc(value: JsonValue): boolean {
+  if (Array.isArray(value)) return value.length > 0 && value.every(looksLikeJsonRpc);
+  if (typeof value !== 'object' || value === null) return false;
+
+  const record = value as Record<string, unknown>;
+  const error = record['error'];
+
+  return (
+    record['jsonrpc'] !== undefined ||
+    'result' in record ||
+    'method' in record ||
+    (typeof error === 'object' && error !== null)
+  );
+}
+
+/** The system error code behind a failed fetch, such as ECONNREFUSED. */
+function networkErrorCode(error: unknown): string | undefined {
+  const cause = error instanceof Error ? error.cause : undefined;
+  if (typeof cause === 'object' && cause !== null) {
+    const code = (cause as { code?: unknown }).code;
+    if (typeof code === 'string') return code;
+  }
+  return undefined;
+}
+
+/**
+ * Say why a fetch failed in words.
+ *
+ * Node reports every network failure as the same bare "fetch failed", with the
+ * real reason on `cause`. A local server that simply is not running produced
+ * "HTTP request failed: fetch failed", which reads like a defect.
+ */
+function describeNetworkFailure(error: unknown): string {
+  const code = networkErrorCode(error);
+
+  switch (code) {
+    case 'ECONNREFUSED':
+      return 'nothing is listening there (connection refused). If this is a local server, it is probably not running.';
+    case 'ENOTFOUND':
+    case 'EAI_AGAIN':
+      return 'the host name could not be resolved.';
+    case 'ECONNRESET':
+      return 'the connection was reset by the server.';
+    case 'ETIMEDOUT':
+    case 'UND_ERR_CONNECT_TIMEOUT':
+      return 'the connection attempt timed out.';
+    case 'CERT_HAS_EXPIRED':
+    case 'DEPTH_ZERO_SELF_SIGNED_CERT':
+    case 'SELF_SIGNED_CERT_IN_CHAIN':
+    case 'UNABLE_TO_VERIFY_LEAF_SIGNATURE':
+    case 'ERR_TLS_CERT_ALTNAME_INVALID':
+      return `its TLS certificate was rejected (${code}).`;
+    default: {
+      const message = error instanceof Error ? error.message : 'unknown error';
+      return code === undefined ? message : `${message} (${code})`;
+    }
   }
 }
 

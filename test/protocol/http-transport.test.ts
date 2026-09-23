@@ -239,7 +239,7 @@ describe('failure handling', () => {
     const transport = new HttpTransport({ url: 'http://192.0.2.1:9/mcp' });
 
     await expect(transport.request(req(1, 'tools/list'), 300)).rejects.toThrow(
-      /timed out|HTTP request failed/,
+      /timed out|Could not reach/,
     );
   });
 

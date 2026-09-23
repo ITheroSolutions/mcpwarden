@@ -215,3 +215,18 @@ describe('grading a legacy server', () => {
     expect(report.grade.letter).toBe('A');
   }, 30_000);
 });
+
+describe('a legacy server strict about the handshake', () => {
+  // Refuses every request until notifications/initialized arrives, as the Python
+  // SDK does. On stdio the notification used to go through request(), which
+  // refuses a message without an id, so it was never sent and this server
+  // answered every list call with an error.
+  const STRICT = fileURLToPath(new URL('../fixtures/servers/legacy-strict.mjs', import.meta.url));
+
+  it('is captured, because the handshake is actually completed', async () => {
+    const captured = await connect(STRICT).capture(serverRef(STRICT, 'strict'), 'stdio');
+
+    expect(captured.surface.revisionUsed).toBe('2025-11-25');
+    expect(captured.surface.descriptors.map((d) => d.identity)).toContain('strict_tool');
+  }, 30_000);
+});

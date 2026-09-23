@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  AuthenticationRequiredError,
   CancellationError,
   ConfigurationError,
   DiscoveryError,
@@ -24,6 +25,7 @@ const SECRET = 'ghp_abcdefghijklmnopqrstuvwxyz0123456789AB';
 describe('error taxonomy shape', () => {
   const cases = [
     { Ctor: TransportError, code: 'TRANSPORT_FAILURE' },
+    { Ctor: AuthenticationRequiredError, code: 'AUTHENTICATION_REQUIRED' },
     { Ctor: ProtocolViolationError, code: 'PROTOCOL_VIOLATION' },
     { Ctor: VersionNegotiationError, code: 'VERSION_NEGOTIATION_FAILED' },
     { Ctor: UnsupportedRevisionError, code: 'UNSUPPORTED_REVISION' },

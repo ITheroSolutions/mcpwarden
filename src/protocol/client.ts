@@ -46,6 +46,12 @@ export interface Transport {
     timeoutMs: number,
     signal?: AbortSignal,
   ): Promise<JsonValue>;
+  /**
+   * Send a notification, which carries no id and gets no response. Optional so
+   * an existing transport keeps working; when absent, the client falls back to
+   * `request` and ignores the outcome.
+   */
+  notify?(message: Record<string, unknown>, timeoutMs: number, signal?: AbortSignal): Promise<void>;
   dispose(): Promise<void>;
 }
 
@@ -296,21 +302,22 @@ export class McpClient {
     const used =
       typeof negotiated === 'string' && isSupportedRevision(negotiated) ? negotiated : revision;
 
-    // The handshake is only complete once the client acknowledges it.
-    await this.transport
-      .request(
-        {
-          jsonrpc: '2.0',
-          method: 'notifications/initialized',
-          params: {},
-        },
-        this.timeoutMs,
-        this.options.signal,
-      )
-      .catch(() => {
-        // A notification has no response, so a timeout here is expected rather
-        // than a failure. The handshake is complete either way.
-      });
+    // The handshake is only complete once the client acknowledges it, and some
+    // servers, the Python SDK's among them, refuse every request until it does.
+    //
+    // This used to go through `request`, which on stdio refuses any message
+    // without an id, so the notification was never actually sent there and the
+    // refusal was swallowed below. A notification is not a request.
+    const initialized = { jsonrpc: '2.0', method: 'notifications/initialized', params: {} };
+    const sent =
+      this.transport.notify === undefined
+        ? this.transport.request(initialized, this.timeoutMs, this.options.signal)
+        : this.transport.notify(initialized, this.timeoutMs, this.options.signal);
+
+    await sent.catch(() => {
+      // With the request fallback there is no response to wait for, so a timeout
+      // is expected rather than a failure. The handshake is complete either way.
+    });
 
     return used;
   }
