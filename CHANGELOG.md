@@ -49,8 +49,10 @@ First release.
   inline credentials, unpinned servers, a minimum grade and a maximum drift risk.
   Exits nonzero on any violation.
 - `mcpwarden migrate`: finds 12 patterns in server source code that break under
-  2026-07-28. `--fix` applies the one change that is safely mechanical, renumbering
-  retired error codes, prints the diff, and writes nothing without `--yes`.
+  2026-07-28, in TypeScript or JavaScript, including an installed package's compiled
+  code. `--fix` applies the one change that is safely mechanical, renumbering
+  retired error codes, prints the diff, and writes nothing without `--yes`. Exits 0
+  when clean, 1 with findings, and 2 when there is nothing to scan.
 - `mcpwarden doctor`: reports the environment, every configuration location
   checked, and the state of the ledger and policy.
 - Reports in terminal, JSON, NDJSON, Markdown, SARIF and HTML formats. Secrets are

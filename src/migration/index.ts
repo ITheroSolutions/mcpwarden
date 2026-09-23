@@ -64,6 +64,12 @@ export interface MigrationReport {
   readonly analysis: 'typescript' | 'line-oriented';
   /** Why the line pass was used, when it was. */
   readonly degradedReason?: string;
+  /**
+   * True when nothing was found outside `dist`, `build` and `out`, so the compiled
+   * output was scanned instead. Normal for an installed npm package, which ships
+   * only compiled code.
+   */
+  readonly scannedCompiledOutput?: boolean;
   readonly summary: Readonly<Record<string, number>>;
 }
 
@@ -93,7 +99,20 @@ const DEFAULT_IGNORES = [
   'target',
 ];
 
-const TS_EXTENSIONS = new Set(['.ts', '.tsx', '.mts', '.cts']);
+/**
+ * Files the compiler pass parses.
+ *
+ * JavaScript is included. It used to go through the line pass even when the
+ * compiler was available, and every installed npm package is JavaScript. Pointed
+ * at four real MCP server packages, the line pass matched `ping` inside
+ * "Scraping" and "Mapping" and `GET` inside `INLINE_TOKEN_BUDGET`: fourteen of
+ * one package's fifteen findings were false. The TypeScript parser reads
+ * JavaScript perfectly well.
+ */
+const COMPILER_EXTENSIONS = new Set(['.ts', '.tsx', '.mts', '.cts', '.js', '.jsx', '.mjs', '.cjs']);
+
+/** Ignored by default because in a source tree they hold compiled copies of it. */
+const COMPILED_OUTPUT_DIRECTORIES = new Set(['dist', 'build', 'out']);
 
 /** Analyse a source tree. */
 export async function analyzeMigration(
@@ -105,7 +124,19 @@ export async function analyzeMigration(
   const ignores = new Set(options.ignoreDirectories ?? DEFAULT_IGNORES);
   const maxFiles = options.maxFiles ?? 5_000;
 
-  const files = await collectFiles(root, extensions, ignores, maxFiles);
+  let files = await collectFiles(root, extensions, ignores, maxFiles);
+  let scannedCompiledOutput = false;
+
+  // An installed npm package ships only compiled code, conventionally under dist.
+  // Ignoring dist is right for a source tree, where it holds a duplicate of the
+  // source, but pointed at a package it meant scanning nothing at all and
+  // reporting a clean result. So when the default ignores find nothing, compiled
+  // output is scanned instead, and the report says so.
+  if (files.length === 0 && options.ignoreDirectories === undefined) {
+    const withoutCompiled = new Set([...ignores].filter((d) => !COMPILED_OUTPUT_DIRECTORIES.has(d)));
+    files = await collectFiles(root, extensions, withoutCompiled, maxFiles);
+    scannedCompiledOutput = files.length > 0;
+  }
 
   const ts = options.forceLinePass === true ? undefined : await loadTypeScript();
   const analysis = ts === undefined ? 'line-oriented' : 'typescript';
@@ -113,6 +144,9 @@ export async function analyzeMigration(
   const findings: MigrationFinding[] = [];
 
   for (const file of files) {
+    // Type declarations duplicate the code they describe and contain no behaviour.
+    if (/\.d\.[mc]?ts$/.test(file)) continue;
+
     let text: string;
     try {
       text = await readFile(file, 'utf8');
@@ -120,9 +154,17 @@ export async function analyzeMigration(
       continue;
     }
 
+    // A minified bundle, typically a web interface a server ships alongside
+    // itself. Nothing in it is readable as a finding, and a scan of one produced
+    // screens of matches all reported on line 1.
+    if (isMinified(text)) {
+      logger.debug('skipping minified file', { file });
+      continue;
+    }
+
     const relativePath = relative(root, file).split(sep).join('/');
 
-    if (ts !== undefined && TS_EXTENSIONS.has(extname(file))) {
+    if (ts !== undefined && COMPILER_EXTENSIONS.has(extname(file))) {
       findings.push(...analyzeWithCompiler(ts, text, relativePath));
     } else {
       findings.push(...analyzeLines(text, relativePath, ts === undefined ? 'low' : 'medium'));
@@ -141,6 +183,7 @@ export async function analyzeMigration(
     filesScanned: files.length,
     findings: findings.sort(bySeverityThenLocation),
     analysis,
+    ...(scannedCompiledOutput ? { scannedCompiledOutput } : {}),
     ...(ts === undefined && options.forceLinePass !== true
       ? {
           degradedReason:
@@ -247,13 +290,32 @@ function analyzeWithCompiler(
       }
     }
 
+    // A legacy server exposes its SSE stream as a GET route on its MCP endpoint:
+    // app.get('/mcp', ...) or app.get('/sse', ...). Matched on the `get`
+    // identifier after a dot, followed by a route literal naming mcp or sse.
+    if (isIdent && node.getText?.() === 'get') {
+      const start = node.getStart?.() ?? node.pos;
+      const before = source.text.slice(0, start).trimEnd();
+      const after = source.text.slice(node.end, node.end + 200);
+      const route = /^\s*\(\s*(['"`])([^'"`]*)\1/.exec(after);
+
+      if (before.endsWith('.') && route !== null && /(^|\/)(mcp|sse)\b/i.test(route[2] ?? '')) {
+        const pattern = patternById('MIG-GET-STREAM');
+        if (pattern !== undefined) {
+          const { line } = source.getLineAndCharacterOfPosition(start);
+          findings.push(toFinding(pattern, file, line + 1, `get(${route[1] ?? ''}${route[2] ?? ''}${route[1] ?? ''}`, 'high'));
+        }
+      }
+    }
+
     if (isLiteral || isIdent) {
       const raw = node.getText?.() ?? '';
       const value = isLiteral ? raw.slice(1, -1) : raw;
+      const isPropertyName = isIdent && isPropertyKey(ts, node);
 
       for (const [patternId, signals] of Object.entries(PATTERN_SIGNALS)) {
         for (const signal of signals) {
-          if (!matchesSignal(value, signal, isLiteral)) continue;
+          if (!matchesSignal(value, signal, isLiteral, isPropertyName)) continue;
 
           const pattern = patternById(patternId);
           if (pattern === undefined) continue;
@@ -274,17 +336,61 @@ function analyzeWithCompiler(
 }
 
 /**
+ * Identifiers specific enough to MCP to count as a signal on their own.
+ *
+ * Generic words are deliberately absent. Matched as identifiers, `initialize`
+ * and `sessionId` hit every class with an initialize method and every search or
+ * database session in a codebase: one real server produced over three hundred
+ * such findings. As string literals they still match exactly, which is how a
+ * method name appears in a handler.
+ */
+const SPECIFIC_IDENTIFIERS = new Set([
+  'InitializeRequest',
+  'InitializeResult',
+  'InitializeRequestSchema',
+  'lastEventId',
+  'resumptionToken',
+  'handleGet',
+  'onGet',
+]);
+
+/**
  * Decide whether a source token matches a migration signal.
  *
- * String literals match exactly, because a method name is an exact string and a
- * substring match on `ping` would hit `mapping`, `shipping` and `stripping`.
- * Identifiers match case insensitively but still whole, for the same reason.
+ * - A string literal matches a signal exactly, because a method name is an exact
+ *   string and a substring match on `ping` would hit `mapping`.
+ * - A signal written with a trailing colon, such as `roots:`, names a capability
+ *   key and matches only an identifier used as a property name.
+ * - Any other identifier matches only if it is in {@link SPECIFIC_IDENTIFIERS},
+ *   exactly and case sensitively. Case insensitive matching once let the
+ *   identifier `get`, as in `map.get(key)`, match the signal `'GET'`.
  */
-function matchesSignal(value: string, signal: string, isLiteral: boolean): boolean {
+function matchesSignal(
+  value: string,
+  signal: string,
+  isLiteral: boolean,
+  isPropertyName: boolean,
+): boolean {
   const cleaned = signal.replace(/^['"]|['"]$/g, '').replace(/:$/, '');
 
   if (isLiteral) return value === cleaned;
-  return value.toLowerCase() === cleaned.toLowerCase();
+  if (/^['"]/.test(signal)) return false;
+  if (signal.endsWith(':')) return isPropertyName && value === cleaned;
+
+  return SPECIFIC_IDENTIFIERS.has(cleaned) && value === cleaned;
+}
+
+/** Whether an identifier is the key of a property assignment, as in `{ roots: ... }`. */
+function isPropertyKey(ts: TypeScriptApi, node: TsNode): boolean {
+  const parent = (node as TsNode & { parent?: TsNode & { name?: TsNode } }).parent;
+  return parent !== undefined && ts.isPropertyAssignment(parent) && parent.name === node;
+}
+
+/** A minified bundle: large, with very long average lines. */
+function isMinified(text: string): boolean {
+  if (text.length < 20_000) return false;
+  const lines = text.split('\n').length;
+  return text.length / lines > 500;
 }
 
 /**
@@ -318,10 +424,14 @@ function analyzeLines(
     }
     if (trimmed.startsWith('//') || trimmed.startsWith('#') || trimmed.startsWith('*')) continue;
 
+    if (/\.get\(\s*(['"`])[^'"`]*\b(mcp|sse)\b[^'"`]*\1/i.test(raw)) {
+      const pattern = patternById('MIG-GET-STREAM');
+      if (pattern !== undefined) findings.push(toFinding(pattern, file, index + 1, trimmed, confidence));
+    }
+
     for (const [patternId, signals] of Object.entries(PATTERN_SIGNALS)) {
       for (const signal of signals) {
-        const needle = signal.replace(/^['"]|['"]$/g, '');
-        if (!raw.includes(needle)) continue;
+        if (!lineMatchesSignal(raw, signal)) continue;
 
         const pattern = patternById(patternId);
         if (pattern === undefined) continue;
@@ -333,6 +443,26 @@ function analyzeLines(
   }
 
   return findings;
+}
+
+/**
+ * Match a signal on a line of text, as a whole word.
+ *
+ * A signal written quoted, such as `'GET'`, must appear quoted: a bare GET in a
+ * comment or inside BUDGET is not an HTTP method. Any other signal must stand
+ * alone, not be part of a longer identifier, so `ping` no longer matches inside
+ * "Scraping".
+ */
+function lineMatchesSignal(line: string, signal: string): boolean {
+  const quoted = /^['"](.*)['"]$/.exec(signal);
+
+  if (quoted !== null) {
+    const value = quoted[1] ?? '';
+    return [`'${value}'`, `"${value}"`, `\`${value}\``].some((form) => line.includes(form));
+  }
+
+  const escaped = signal.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`(?<![A-Za-z0-9_$])${escaped}(?![A-Za-z0-9_$])`).test(line);
 }
 
 function toFinding(

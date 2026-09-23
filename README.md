@@ -122,8 +122,15 @@ mcpwarden migrate ./src --format sarif --output results.sarif
 
 Twelve patterns that break under the new revision, each with the specific fix rather
 than a pointer at the changelog. With the TypeScript compiler available, detection
-runs on a real AST; without it, a line oriented pass runs and its findings are
-labelled lower confidence and say so.
+runs on a real AST, for JavaScript as well as TypeScript; without it, a line oriented
+pass runs and its findings are labelled lower confidence and say so.
+
+It matches method names as exact strings and only MCP specific identifiers, so a word
+like "Scraping" or a variable called `sessionId` is not a finding. Pointed at an
+installed package, which ships only compiled code, it scans `dist` and says so.
+
+Exits 0 when nothing is found, 1 when something is, and 2 when the path contains no
+source at all.
 
 ## CI integration
 

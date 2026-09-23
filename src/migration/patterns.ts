@@ -185,9 +185,17 @@ export function patternById(id: string): MigrationPattern | undefined {
  * train people to ignore the report.
  */
 export const PATTERN_SIGNALS: Readonly<Record<string, readonly string[]>> = {
-  'MIG-INITIALIZE': ['initialize', 'notifications/initialized', 'InitializeRequest', 'InitializeResult'],
+  'MIG-INITIALIZE': [
+    'initialize',
+    'notifications/initialized',
+    'InitializeRequest',
+    'InitializeResult',
+    'InitializeRequestSchema',
+  ],
   'MIG-SESSION': ['Mcp-Session-Id', 'mcp-session-id', 'sessionId', 'sessionID'],
-  'MIG-GET-STREAM': ["'GET'", '"GET"', 'handleGet', 'onGet'],
+  // A GET route on an MCP or SSE path is detected structurally, not from these;
+  // a bare "GET" string is in every HTTP client and matched almost nothing else.
+  'MIG-GET-STREAM': ['handleGet', 'onGet'],
   'MIG-RESUMABILITY': ['Last-Event-ID', 'last-event-id', 'lastEventId', 'resumptionToken'],
   'MIG-SUBSCRIBE': ['resources/subscribe', 'resources/unsubscribe'],
   'MIG-PING': ['ping', 'logging/setLevel', 'notifications/roots/list_changed'],

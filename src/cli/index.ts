@@ -135,7 +135,18 @@ async function dispatch(
         return await migrateFix(target, flags, io);
       }
 
-      return emit(await migrateReport(target, flags, logger), flags, io, true);
+      const migration = await migrateReport(target, logger);
+
+      // A scan that read nothing is not a pass. Most often the path is wrong.
+      if (migration.filesScanned === 0) {
+        await emit(migration.report, flags, io);
+        io.stderr(`No source files were found under ${target}.\n`);
+        return EXIT_CODES.usageError;
+      }
+
+      // Failed only when something was found. This used to fail unconditionally,
+      // so a CI job running migrate on a clean codebase could never pass.
+      return emit(migration.report, flags, io, migration.findings > 0);
     }
 
     case 'capture':
@@ -248,15 +259,14 @@ function notesFor(inventory: Inventory): readonly string[] {
 
 async function migrateReport(
   path: string,
-  flags: GlobalFlags,
   logger: Logger,
-): Promise<Report> {
+): Promise<{ report: Report; filesScanned: number; findings: number }> {
   const report = await analyzeMigration(path, { logger });
 
   const bySeverity = (severity: string): number =>
     report.findings.filter((f) => f.severity === severity).length;
 
-  return buildReport({
+  const built = buildReport({
     kind: 'migration',
     title: 'Migration analysis for the 2026-07-28 revision',
     subject: path,
@@ -287,9 +297,20 @@ async function migrateReport(
         })),
       },
     ],
-    notes: report.degradedReason === undefined ? [] : [report.degradedReason],
+    notes: [
+      ...(report.degradedReason === undefined ? [] : [report.degradedReason]),
+      ...(report.scannedCompiledOutput === true
+        ? [
+            'No source files were found outside dist, build and out, so the compiled output ' +
+              'was scanned instead. This is normal for an installed package. File and line ' +
+              'references point at the compiled files.',
+          ]
+        : []),
+    ],
     redaction: {},
   });
+
+  return { report: built, filesScanned: report.filesScanned, findings: report.findings.length };
 }
 
 /**
