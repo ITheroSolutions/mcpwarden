@@ -177,7 +177,20 @@ export function checkPolicy(policy: Policy, input: PolicyInput): PolicyResult {
 
     const grade = input.grades?.[server.id];
     if (policy.minimumGrade !== undefined && grade !== undefined) {
-      if (isBelow(grade.letter, policy.minimumGrade)) {
+      // A server that was not graded cannot meet a minimum grade. Before the
+      // grader learned to refuse, this is the gate an empty rule set scored as
+      // an A slipped straight through.
+      if (grade.letter === null) {
+        violations.push(
+          violation(
+            'grade-below-minimum',
+            server,
+            `${describe(server)} was not graded, so it cannot meet the required minimum of ${policy.minimumGrade}. ${grade.reason ?? ''}`.trim(),
+            `Run: mcpwarden conform ${server.name} to see why.`,
+            'high',
+          ),
+        );
+      } else if (isBelow(grade.letter, policy.minimumGrade)) {
         violations.push(
           violation(
             'grade-below-minimum',

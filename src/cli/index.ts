@@ -407,7 +407,11 @@ async function serverCommand(
 
       case 'conform': {
         const report = grade(captured);
-        return await emit(conformReport(server, report), flags, io, report.grade.mustFailed > 0);
+        // Not graded fails too. The question conform answers is whether this
+        // server implements the graded revision, and for a server on another
+        // revision the answer is no, which a CI job must not read as a pass.
+        const failed = report.grade.status === 'not-graded' || report.grade.mustFailed > 0;
+        return await emit(conformReport(server, report), flags, io, failed);
       }
 
       case 'trust': {
@@ -488,16 +492,22 @@ function captureReport(surface: Parameters<typeof createPin>[0], root: string): 
 function conformReport(server: ServerRef, report: ReturnType<typeof grade>): Report {
   return buildReport({
     kind: 'conformance',
-    title: `Conformance against ${report.revision}`,
+    title: `Conformance against ${TARGET_REVISION}`,
     subject: server.name,
     toolVersion: VERSION,
     summary: [
+      report.grade.letter === null
+        ? { label: 'Grade', value: 'Not graded', severity: 'high' as const }
+        : {
+            label: 'Grade',
+            value: report.grade.letter,
+            ...(report.grade.mustFailed > 0 ? { severity: 'high' as const } : {}),
+          },
       {
-        label: 'Grade',
-        value: report.grade.letter,
-        ...(report.grade.mustFailed > 0 ? { severity: 'high' as const } : {}),
+        label: 'Score',
+        value: report.grade.score === null ? 'none' : `${String(report.grade.score)} / 100`,
       },
-      { label: 'Score', value: `${String(report.grade.score)} / 100` },
+      { label: 'Revision spoken', value: report.revision },
       {
         label: 'MUST failed',
         value: String(report.grade.mustFailed),
@@ -509,7 +519,10 @@ function conformReport(server: ServerRef, report: ReturnType<typeof grade>): Rep
     sections: [
       {
         title: 'Findings',
-        emptyMessage: 'This server satisfies every rule that applies to it.',
+        emptyMessage:
+          report.grade.status === 'not-graded'
+            ? 'No findings, because no rule was graded. See the note below.'
+            : 'This server satisfies every rule that applies to it.',
         items: report.findings.map((finding) => ({
           id: finding.ruleId,
           title: finding.title,
@@ -521,13 +534,15 @@ function conformReport(server: ServerRef, report: ReturnType<typeof grade>): Rep
         })),
       },
     ],
-    notes:
-      report.unverified.length === 0
+    notes: [
+      ...(report.grade.reason === undefined ? [] : [report.grade.reason]),
+      ...(report.unverified.length === 0
         ? []
         : [
             `${String(report.unverified.length)} rule(s) reported but were excluded from the ` +
               'score because they are not yet grounded in fetched specification text.',
-          ],
+          ]),
+    ],
     redaction: {},
   });
 }

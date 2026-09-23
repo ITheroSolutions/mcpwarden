@@ -2,6 +2,7 @@ import { fileURLToPath } from 'node:url';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
+import { grade } from '../../src/conformance/index.js';
 import type { ServerRef } from '../../src/core/types.js';
 import { McpClient } from '../../src/protocol/client.js';
 import { StdioTransport } from '../../src/protocol/stdio-transport.js';
@@ -182,5 +183,35 @@ describe('a modern capture is unaffected', () => {
 
     expect(captured.surface.revisionUsed).toBe('2026-07-28');
     expect(captured.evidence.negotiation.downgraded).toBe(false);
+  }, 30_000);
+});
+
+describe('grading a legacy server', () => {
+  // Found by running conform against a real remote server. It speaks
+  // 2025-11-25, no rule applies to that revision, and the empty rule set was
+  // scored as 100 out of 100, grade A, exit 0. Nearly every server in the wild
+  // is still on 2025-11-25, so nearly every conform a new user ran would have
+  // printed an A and passed a CI grade gate for a server that does not
+  // implement the revision being graded at all. DECISIONS.md D-003 says this
+  // revision is captured but never graded.
+  it('is reported as not graded rather than given a letter', async () => {
+    const captured = await connect(LEGACY).capture(serverRef(LEGACY, 'legacy'), 'stdio');
+    const report = grade(captured);
+
+    expect(report.grade.status).toBe('not-graded');
+    expect(report.grade.letter).toBeNull();
+    expect(report.grade.score).toBeNull();
+    expect(report.grade.reason).toMatch(/2025-11-25/);
+  }, 30_000);
+
+  it('still grades a modern server normally', async () => {
+    const captured = await connect(MODERN, { MCPWARDEN_FIXTURE_MODE: 'conforming' }).capture(
+      serverRef(MODERN, 'modern'),
+      'stdio',
+    );
+    const report = grade(captured);
+
+    expect(report.grade.status).toBe('graded');
+    expect(report.grade.letter).toBe('A');
   }, 30_000);
 });

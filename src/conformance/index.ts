@@ -30,7 +30,7 @@ import type {
   GradeLetter,
   RuleResult,
 } from '../core/types.js';
-import type { ProtocolRevision } from '../core/revisions.js';
+import { TARGET_REVISION, type ProtocolRevision } from '../core/revisions.js';
 import { redact } from '../core/redaction.js';
 import { RULES, type RuleContext } from './rules.js';
 
@@ -127,7 +127,40 @@ export function grade(context: RuleContext): ConformanceReport {
     }
   }
 
-  const score = possible === 0 ? 100 : Math.round((earned / possible) * 100);
+  const counts = {
+    mustPassed,
+    mustFailed,
+    shouldPassed,
+    shouldFailed,
+    unverifiedReported: unverified.length,
+    notApplicable,
+  };
+
+  // Refuse to grade rather than grade an empty set. Previously `possible === 0`
+  // scored as 100, so a server speaking 2025-11-25, to which no rule applies,
+  // received an A and passed any grade gate. DECISIONS.md D-003: that revision
+  // is captured, never graded.
+  const reason =
+    revision !== TARGET_REVISION
+      ? `This server speaks ${revision}. mcpwarden grades conformance to ${TARGET_REVISION} only, ` +
+        `so the server does not implement the revision being graded. Its surface was still ` +
+        `captured and can be pinned and diffed.`
+      : possible === 0
+        ? `No graded rule produced a result for this server, so there is nothing to score. ` +
+          `Every applicable rule was inconclusive or not applicable.`
+        : undefined;
+
+  if (reason !== undefined) {
+    return {
+      revision,
+      results,
+      findings: findings.sort(bySeverity),
+      unverified,
+      grade: { status: 'not-graded', reason, letter: null, score: null, ...counts },
+    };
+  }
+
+  const score = Math.round((earned / possible) * 100);
 
   return {
     revision,
@@ -135,6 +168,7 @@ export function grade(context: RuleContext): ConformanceReport {
     findings: findings.sort(bySeverity),
     unverified,
     grade: {
+      status: 'graded',
       letter: toLetter(score, mustFailed),
       score,
       mustPassed,

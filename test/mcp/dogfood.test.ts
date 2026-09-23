@@ -224,7 +224,7 @@ function formatFailures(report: ReturnType<typeof grade>): string {
   if (report.findings.length === 0) return 'no findings';
 
   return (
-    `\n${report.grade.letter} (${String(report.grade.score)}/100)\n` +
+    `\n${report.grade.letter ?? 'not graded'} (${String(report.grade.score)}/100)\n` +
     report.findings
       .map((f) => `  ${f.ruleId} [${f.severity}] ${f.title}\n    ${f.detail}`)
       .join('\n')

@@ -73,6 +73,7 @@ function inventory(servers: readonly ServerRef[]): Inventory {
 
 function grade(letter: Grade['letter'], mustFailed = 0): Grade {
   return {
+    status: letter === null ? 'not-graded' : 'graded',
     letter,
     score: letter === 'A' ? 100 : 50,
     mustPassed: 5,
@@ -152,6 +153,19 @@ describe('every violation kind is reachable', () => {
       {
         inventory: inventory([server('weak')]),
         grades: { 'id-weak': grade('D', 2) },
+      },
+    );
+    expect(result.violations.map((v) => v.kind)).toContain('grade-below-minimum');
+  });
+
+  it('fails a server that was not graded against any minimum grade', () => {
+    // The gate an empty rule set scored as an A used to slip through. A server
+    // on a revision the grader does not grade cannot meet a minimum grade.
+    const result = checkPolicy(
+      { version: 1, minimumGrade: 'D' },
+      {
+        inventory: inventory([server('legacy')]),
+        grades: { 'id-legacy': grade(null) },
       },
     );
     expect(result.violations.map((v) => v.kind)).toContain('grade-below-minimum');

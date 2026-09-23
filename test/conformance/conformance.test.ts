@@ -211,7 +211,7 @@ describe('grading arithmetic', () => {
 
     expect(one.grade.mustFailed).toBe(0);
     expect(several.grade.mustFailed).toBeGreaterThan(0);
-    expect(several.grade.score).toBeLessThan(one.grade.score);
+    expect(several.grade.score).toBeLessThan(one.grade.score ?? Number.NaN);
   });
 
   it('does not let a SHOULD failure produce a MUST failure count', async () => {

@@ -225,9 +225,19 @@ export interface RuleResult {
 export type GradeLetter = 'A' | 'B' | 'C' | 'D' | 'F';
 
 export interface Grade {
-  readonly letter: GradeLetter;
-  /** Zero to one hundred. */
-  readonly score: number;
+  /**
+   * `not-graded` when there is nothing honest to grade: the server speaks a
+   * revision other than the graded one, or no rule produced a result. In that
+   * case `letter` and `score` are null rather than a number, because an empty
+   * rule set scored as 100 out of 100 is an A the server did not earn, and a
+   * CI gate reading the letter would pass it.
+   */
+  readonly status: 'graded' | 'not-graded';
+  /** Why the server was not graded. Present only when `status` is `not-graded`. */
+  readonly reason?: string;
+  readonly letter: GradeLetter | null;
+  /** Zero to one hundred, or null when not graded. */
+  readonly score: number | null;
   readonly mustPassed: number;
   readonly mustFailed: number;
   readonly shouldPassed: number;
