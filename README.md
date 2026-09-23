@@ -105,13 +105,20 @@ mcpwarden diff my-server        # later: what changed?
 mcpwarden ledger verify         # is the log itself intact?
 ```
 
-Drift is classified, not merely counted: a tool added or removed, a description
-changed after approval, a schema widened or narrowed, a parameter newly required, a
-name that collides with another server, the protocol revision changing.
+Drift is classified, not merely counted: a tool added or removed, its description,
+schema or other fields changed after approval, a parameter newly required, a name
+that collides with another server, the protocol revision changing. The pin stores
+only hashes, one per part of each tool, so it can say which part changed without
+keeping a copy of anything.
 
-A description change on an already approved tool is the highest signal event, because
-that is exactly how tool poisoning presents: the name stays, the schema stays, and
-the text the model actually reads is replaced.
+Tool poisoning presents as changed text: the name stays and the text the model reads
+is replaced. But every legitimate release rewords its tools too, so a changed
+description alone is medium, or high on a tool that touches the filesystem, network
+or shell. Critical is reserved for new or changed text that carries a sign of
+poisoning: hidden Unicode, an `<IMPORTANT>` style instruction tag, a direction to keep
+something from the user or ignore other instructions, or a reference to a credential
+file such as an SSH key. Upgrading a real browser automation server between two
+releases produces no critical events; a planted instruction does.
 
 ## Migrating a server to 2026-07-28
 
@@ -158,6 +165,11 @@ jobs:
           sarif_file: mcpwarden.sarif
 ```
 
+`verify` inventories the MCP configuration committed to the repository, such as
+`.mcp.json`, `.vscode/mcp.json` and `.cursor/mcp.json`, alongside anything under the
+runner's home directory. So in CI it checks the servers your project ships, and fails
+on a credential written into one of them.
+
 Generate a starting policy with `mcpwarden policy init`. It passes on the machine it
 came from, with one deliberate exception: inline credentials fail immediately.
 
@@ -165,7 +177,7 @@ came from, with one deliberate exception: inline credentials fail immediately.
 
 | Command | What it does |
 | --- | --- |
-| `discover` | Inventory every MCP server configured on this machine. Offline. |
+| `discover` | Inventory every MCP server configured on this machine and in the current project. Offline. |
 | `capture <server>` | Connect and record what a server advertises, into the ledger. |
 | `conform <server>` | Grade a server against the 2026-07-28 specification. |
 | `migrate <path>` | Analyse a source tree for patterns that break under 2026-07-28. |
@@ -191,7 +203,8 @@ came from, with one deliberate exception: inline credentials fail immediately.
 | `--log-level <level>` | `silent` | `silent`, `error`, `warn`, `info`, `debug`, `trace` |
 | `--timeout <ms>` | `30000` | Per operation time budget |
 | `--colour`, `--no-colour` | auto | Defaults to on only when stdout is a terminal |
-| `--yes`, `-y` | off | Do not prompt for confirmation |
+| `--fix` | off | With `migrate`, apply the safe codemods. Prints a diff; writes nothing without `--yes`. |
+| `--yes`, `-y` | off | Confirm a write. Required by `migrate --fix`. |
 
 The report goes to stdout and every diagnostic goes to stderr, including at
 `--log-level trace`, so `mcpwarden conform x --format json | jq` is always safe.

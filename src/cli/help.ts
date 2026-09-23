@@ -9,8 +9,9 @@ USAGE
   mcpwarden <command> [target] [options]
 
 COMMANDS
-  discover              Inventory every MCP server configured on this machine.
-                        Entirely offline. Connects to nothing.
+  discover              Inventory every MCP server configured on this machine
+                        and in the current project (.mcp.json, .vscode/mcp.json,
+                        .cursor/mcp.json). Entirely offline. Connects to nothing.
 
   capture <server>      Connect to a server and record what it advertises.
 

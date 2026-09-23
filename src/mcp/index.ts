@@ -63,7 +63,7 @@ const TOOLS: readonly ToolDefinition[] = [
       'Credential values are never returned, only the fact that one exists.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
     handler: async () => {
-      const inventory = await discover({});
+      const inventory = await discover({ projectDirectories: [process.cwd()] });
 
       return {
         summary: inventory.summary,
@@ -222,7 +222,7 @@ const TOOLS: readonly ToolDefinition[] = [
     },
     handler: async (args) => {
       const policy = await loadPolicy(readString(args, 'policyPath'));
-      const inventory = await discover({});
+      const inventory = await discover({ projectDirectories: [process.cwd()] });
 
       return checkPolicy(policy, { inventory });
     },
@@ -380,7 +380,7 @@ function readString(args: Record<string, JsonValue>, key: string): string {
 }
 
 async function resolveServer(name: string): Promise<ServerRef> {
-  const inventory = await discover({});
+  const inventory = await discover({ projectDirectories: [process.cwd()] });
   const server = inventory.servers.find((s) => s.name === name || s.id === name);
 
   if (server === undefined) {

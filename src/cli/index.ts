@@ -46,6 +46,14 @@ export interface CliIo {
   readonly stderr: (text: string) => void;
   readonly env: Readonly<Record<string, string | undefined>>;
   readonly isTty: boolean;
+  /**
+   * The directory whose project level configuration (`.mcp.json`,
+   * `.vscode/mcp.json`, `.cursor/mcp.json`) is inventoried alongside the user's
+   * own. Defaults to the process working directory. Without it, the CLI read only
+   * configuration under the home directory, so a CI job running `verify` on a
+   * runner, which has none, checked nothing and passed.
+   */
+  readonly cwd?: string;
 }
 
 /**
@@ -120,10 +128,10 @@ async function dispatch(
 
   switch (command) {
     case 'discover':
-      return emit(await discoverReport(flags, logger), flags, io);
+      return emit(await discoverReport(flags, logger, io.cwd ?? process.cwd()), flags, io);
 
     case 'doctor':
-      return emit(await doctorReport(flags, config), flags, io);
+      return emit(await doctorReport(flags, config, io.cwd ?? process.cwd()), flags, io);
 
     case 'migrate': {
       const target = targets[0];
@@ -174,8 +182,8 @@ async function dispatch(
 // Commands
 // ---------------------------------------------------------------------------
 
-async function discoverReport(flags: GlobalFlags, logger: Logger): Promise<Report> {
-  const inventory = await discover({ logger });
+async function discoverReport(flags: GlobalFlags, logger: Logger, cwd: string): Promise<Report> {
+  const inventory = await discover({ logger, projectDirectories: [cwd] });
 
   return buildReport({
     kind: 'inventory',
@@ -402,7 +410,7 @@ async function serverCommand(
     return EXIT_CODES.usageError;
   }
 
-  const inventory = await discover({ logger });
+  const inventory = await discover({ logger, projectDirectories: [io.cwd ?? process.cwd()] });
   const server = inventory.servers.find((s) => s.name === name || s.id === name);
 
   if (server === undefined) {
@@ -628,7 +636,7 @@ async function verifyCommand(
     return EXIT_CODES.usageError;
   }
 
-  const inventory = await discover({ logger });
+  const inventory = await discover({ logger, projectDirectories: [io.cwd ?? process.cwd()] });
   const result = checkPolicy(policy, { inventory });
 
   const report = buildReport({
@@ -739,7 +747,7 @@ async function policyCommand(
 
   switch (subcommand) {
     case 'init': {
-      const inventory = await discover({ logger });
+      const inventory = await discover({ logger, projectDirectories: [io.cwd ?? process.cwd()] });
       const policy = initPolicy(inventory);
 
       await savePolicy(path, policy);
@@ -761,8 +769,12 @@ async function policyCommand(
   }
 }
 
-async function doctorReport(flags: GlobalFlags, config: McpWardenConfig): Promise<Report> {
-  const inventory = await discover({});
+async function doctorReport(
+  flags: GlobalFlags,
+  config: McpWardenConfig,
+  cwd: string,
+): Promise<Report> {
+  const inventory = await discover({ projectDirectories: [cwd] });
   const ledgerPath = ledgerPathFor(flags, config);
   const ledger = new Ledger(ledgerPath);
 
