@@ -642,11 +642,16 @@ export class McpClient {
 
 function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
+    // Not unref'd. This is the backoff between capture retries, and an
+    // unref'd timer here was the direct cause of `conform` against a server
+    // that dies on spawn exiting with ERR_UNSETTLED_TOP_LEVEL_AWAIT: the child
+    // was gone, so nothing else held the loop open, the backoff timer could not,
+    // and Node exited while the caller was still awaiting the capture. The abort
+    // path clears it, so a cancelled capture does not wait out the delay.
     const timer = setTimeout(() => {
       signal?.removeEventListener('abort', onAbort);
       resolve();
     }, ms);
-    timer.unref();
 
     const onAbort = (): void => {
       clearTimeout(timer);

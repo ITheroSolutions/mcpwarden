@@ -283,8 +283,12 @@ export class StdioTransport {
         });
       }, timeoutMs);
 
-      // Do not hold the event loop open on account of a pending timeout.
-      timer.unref();
+      // Deliberately not unref'd. This timer's only job is to settle a promise a
+      // caller is awaiting, so it has to be able to hold the event loop open. If
+      // it cannot, and it is the last thing scheduled, which is exactly what
+      // happens when the server process has already died, Node drains the loop
+      // and exits mid await instead of timing out. Every settle path clears it,
+      // so it holds the loop only while a request is genuinely outstanding.
 
       this.pending.set(key, {
         resolve: (value) => {
@@ -366,10 +370,12 @@ export class StdioTransport {
     if (this.exited) return Promise.resolve(true);
 
     return new Promise<boolean>((resolve) => {
+      // Not unref'd, for the same reason as the request timeout above: it
+      // resolves a promise `dispose` is awaiting. The child's exit handler
+      // clears it, so it cannot outlive the wait it bounds.
       const timer = setTimeout(() => {
         resolve(false);
       }, ms);
-      timer.unref();
 
       child.once('exit', () => {
         clearTimeout(timer);

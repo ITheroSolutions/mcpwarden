@@ -124,10 +124,14 @@ export class HttpTransport {
     };
     options.signal?.addEventListener('abort', onAbort, { once: true });
 
+    // Not unref'd, matching the stdio transport. This timer aborts a fetch the
+    // caller is awaiting, so it must be able to hold the event loop open. An
+    // in flight fetch usually holds it anyway through its socket, which makes
+    // the failure rarer here than on stdio rather than impossible. The finally
+    // below clears it on every path.
     const timer = setTimeout(() => {
       controller.abort();
     }, options.timeoutMs);
-    timer.unref();
 
     try {
       const body =
